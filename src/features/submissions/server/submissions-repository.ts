@@ -6,7 +6,6 @@ export type SubmissionMeta = {
   id: string;
   filename: string;
   extension: ".py" | ".ipynb";
-  uploadedAt: string;
   size: number;
 };
 
@@ -48,7 +47,9 @@ function splitNameAndExt(filename: string): { name: string; ext: string } {
 }
 
 function dedupeFilename(filename: string, existing: SubmissionMeta[]): string {
-  const existingLower = new Set(existing.map((item) => item.filename.toLowerCase()));
+  const existingLower = new Set(
+    existing.map((item) => item.filename.toLowerCase()),
+  );
   if (!existingLower.has(filename.toLowerCase())) {
     return filename;
   }
@@ -75,7 +76,12 @@ function decodeUtf16Be(buffer: Buffer): string {
 }
 
 function decodeTextWithFallback(buffer: Buffer): string {
-  if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+  if (
+    buffer.length >= 3 &&
+    buffer[0] === 0xef &&
+    buffer[1] === 0xbb &&
+    buffer[2] === 0xbf
+  ) {
     return buffer.toString("utf8");
   }
   if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
@@ -89,12 +95,19 @@ function decodeTextWithFallback(buffer: Buffer): string {
   const utf16le = buffer.toString("utf16le");
   const utf16be = decodeUtf16Be(buffer);
   const candidates = [utf8, utf16le, utf16be];
-  const ranked = candidates.sort((a, b) => b.replace(/\u0000/g, "").length - a.replace(/\u0000/g, "").length);
+  const ranked = candidates.sort(
+    (a, b) => b.replace(/\u0000/g, "").length - a.replace(/\u0000/g, "").length,
+  );
   return ranked[0];
 }
 
 function parseNotebookJson(buffer: Buffer): unknown {
-  const candidates = [decodeTextWithFallback(buffer), buffer.toString("utf8"), buffer.toString("utf16le"), decodeUtf16Be(buffer)];
+  const candidates = [
+    decodeTextWithFallback(buffer),
+    buffer.toString("utf8"),
+    buffer.toString("utf16le"),
+    decodeUtf16Be(buffer),
+  ];
 
   const uniqueCandidates = [...new Set(candidates)];
   for (const text of uniqueCandidates) {
@@ -110,7 +123,9 @@ function parseNotebookJson(buffer: Buffer): unknown {
     }
   }
 
-  throw new Error("ipynb JSON 파싱에 실패했습니다. 파일 인코딩 또는 형식을 확인해주세요.");
+  throw new Error(
+    "ipynb JSON 파싱에 실패했습니다. 파일 인코딩 또는 형식을 확인해주세요.",
+  );
 }
 
 function notebookToPython(notebookBuffer: Buffer): string {
@@ -138,7 +153,9 @@ function notebookToPython(notebookBuffer: Buffer): string {
 
     const source = (cell as { source?: unknown }).source;
     if (Array.isArray(source)) {
-      const lines = source.map((line) => (typeof line === "string" ? line : "")).join("");
+      const lines = source
+        .map((line) => (typeof line === "string" ? line : ""))
+        .join("");
       codeChunks.push(lines);
       continue;
     }
@@ -179,10 +196,12 @@ async function writeIndex(index: SubmissionIndex) {
 
 export async function listSubmissions(): Promise<SubmissionMeta[]> {
   const index = await readIndex();
-  return [...index.items].sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1));
+  return [...index.items].reverse();
 }
 
-export async function createSubmissionFromFile(file: File): Promise<SubmissionMeta> {
+export async function createSubmissionFromFile(
+  file: File,
+): Promise<SubmissionMeta> {
   const rawName = sanitizeFilename(file.name);
   const extension = extOf(rawName);
 
@@ -204,8 +223,6 @@ export async function createSubmissionFromFile(file: File): Promise<SubmissionMe
   }
 
   const id = crypto.randomUUID();
-  const uploadedAt = new Date().toISOString();
-
   await ensureStore();
   const index = await readIndex();
   const filename = dedupeFilename(rawName, index.items);
@@ -219,7 +236,6 @@ export async function createSubmissionFromFile(file: File): Promise<SubmissionMe
     id,
     filename,
     extension,
-    uploadedAt,
     size: file.size,
   };
 
@@ -228,7 +244,9 @@ export async function createSubmissionFromFile(file: File): Promise<SubmissionMe
   return item;
 }
 
-export async function getSubmissionById(id: string): Promise<SubmissionDetail | null> {
+export async function getSubmissionById(
+  id: string,
+): Promise<SubmissionDetail | null> {
   const index = await readIndex();
   const item = index.items.find((entry) => entry.id === id);
   if (!item) {
@@ -246,7 +264,7 @@ export async function getSubmissionById(id: string): Promise<SubmissionDetail | 
 
 export async function listSubmissionDetails(): Promise<SubmissionDetail[]> {
   const index = await readIndex();
-  const sorted = [...index.items].sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1));
+  const sorted = [...index.items].reverse();
   const details = await Promise.all(
     sorted.map(async (item) => {
       const codePath = path.join(DATA_ROOT, `${item.id}.code.py`);
@@ -262,7 +280,9 @@ export async function listSubmissionDetails(): Promise<SubmissionDetail[]> {
   return details.filter((item): item is SubmissionDetail => item !== null);
 }
 
-export async function getSubmissionSourceById(id: string): Promise<SubmissionSource | null> {
+export async function getSubmissionSourceById(
+  id: string,
+): Promise<SubmissionSource | null> {
   const index = await readIndex();
   const item = index.items.find((entry) => entry.id === id);
   if (!item) {
@@ -278,7 +298,9 @@ export async function getSubmissionSourceById(id: string): Promise<SubmissionSou
   }
 }
 
-export async function deleteSubmissionsByIds(ids: string[]): Promise<{ deletedCount: number }> {
+export async function deleteSubmissionsByIds(
+  ids: string[],
+): Promise<{ deletedCount: number }> {
   if (ids.length === 0) {
     return { deletedCount: 0 };
   }

@@ -46,7 +46,6 @@ export async function POST(request: Request) {
         id: submission.id,
         filename: submission.filename,
         extension: submission.extension,
-        uploadedAt: submission.uploadedAt,
         score: graded.summary.totalScore,
         maxScore: graded.summary.maxScore,
         allPassed: graded.summary.allPassed,
