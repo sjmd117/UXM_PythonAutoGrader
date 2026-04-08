@@ -1,300 +1,335 @@
-# 강의 과제 및 시험 채점 서비스
+# Next.js 자동채점 플랫폼 | 완성형 정보구조 설계 (IA)
 
-<aside>
+---
 
-## 1. 요구사항 분석 (PRD)
+## 1. 최종 서비스 범위 정의
 
-## 1.1 서비스 개요
+### In-Scope (포함)
 
-본 서비스는 김상균 교수님의 기초프로그래밍1 강의 과제를 자동으로 채점하기 위한 플랫폼이다.
+- **다중 조교 협업 플랫폼**: 여러 조교가 로그인하여 과제 채점 작업 수행
+- **프로젝트 단위 관리**: 각 과제(프로젝트)별로 테스트케이스, 조교 초대, 제출 관리
+- **자동 채점 엔진**: Python .py/.ipynb 파일 실행 및 stdout 기반 채점
+- **결과 검토 및 확정**: 자동 채점 후 수동 수정, 코멘트, 최종 성적 확정
+- **성적 데이터 내보내기**: Excel 형식으로 결과 추출
+- **조교 권한 관리**: 프로젝트별 초대 및 권한 부여
 
-## 1.2 서비스 배경
+---
 
-기초프로그래밍1 강의는 2026년 부로 100명 이상의 수강생이 듣게되어 다음과 같은 문제를 가진다.
+## 2. 완성형 IA 사이트맵
 
-### **1) 채점 시간 과다**
+### 2.1 페이지 계층 트리 (URL 포함)
 
-강의 수강생이 약 2배 가량 늘어남에 따라, 조교들이 학생들이 제출한 Jupyter Notebook 및 Python 과제를 일일이 실행하는데 너무 오래 걸리게 된다.
-
-### **2) 채점 기준 불일치**
-
-여러 명의 조교가 채점할 경우 같은 코드라도 평가 기준이 달라질 수 있다.
-
-### **3) 오류 코드 처리 문제**
-
-학생 코드에는 다음과 같은 문제가 존재할 수 있다.
-
-- 문법 오류
-- 실행 오류
-- 무한 루프
-- 잘못된 출력 형식
-
-### **4) 채점 결과 관리 문제**
-
-채점 이후 점수를 다시 정리하고, Excel 파일에 입력해야 하는 추가 작업이 필요하다.
-
-## 1.3 우선순위 및 릴리즈 계획
-
-### 1단계 (MVP)
-
-핵심 기능 중심 개발
-
-- 채점 프로젝트 생성
-- 테스트 케이스 등록
-- 학생 코드 파일 업로드
-- 자동 채점 실행
-- 파일 다운로드 및 삭제 기능
-- 채점 결과 및 점수 조회
-- 파일명을 통한 학생 정보 추출
-- 채점 결과 및 점수 Excel 파일 추출
-- 채점 결과 및 점수 수동 수정 기능 (ex. 지각 제출 감점)
-
-### 2단계
-
-기능 확장
-
-- .py 및 .ipynb 파일 드래그 앤 드롭 기능
-- 플랫폼 내부 코드 실행 기능
-- .zip 폴더 내부 파일 자동 압축 풀기 기능
-- 조교 및 교수 계정 별 코멘트
-- 파일 순서 변경 기능
-- 파일 리스트 column 별 정렬 기능
-
-### 3단계
-
-고급 기능
-
-- 교수, 조교, 학생 로그인/회원가입 계정 분리
-- Python 외 Language 자동 채점 기능
-- 전국 대학 프로그래밍(Python, Java …) 강의 대상 확장
-</aside>
-
-<aside>
-
-## 2. 정보 구조도 (IA)
-
-UXM Lab
-├ 로그인/회원가입
+```
+자동 채점 플랫폼
+├── /auth
+│   ├── /login                         # 로그인 페이지
+│   └── /signup                        # 회원가입 페이지
 │
-├ 홈페이지
+├── /dashboard
+│   └── /                              # 조교 대시보드 (프로젝트 목록)
 │
-├ 프로젝트
-│ └ 프로젝트 목록
-│ ├ 파일 목록
-│ ├ Excel 파일 내보내기
-│ ├ 채점 시작
-│ ├ 파일 다운로드 및 삭제
-│ └ 프로젝트 상세(파일 수정)
-│ ├ 점수 수동 수정
-│ ├ 코드 실행
-│ └ 조교 코멘트
+├── /projects/[projectId]
+│   ├── /                              # 프로젝트(과목) 상세 (개요)
+│   ├── /members                       # 조교 초대/권한 관리
+│   │
+│   ├── /submissions                   # 제출 목록, 과제 페이지
+│   │   ├── 일괄 채점 시작 버튼
+│   │   ├── 업로드된 파일 리스트
+│   │   ├── 필터 / 정렬
+│   │   ├── 테스트케이스 설정
+│   │   └── /[submissionId]
+│   │       └── /                      # 제출 상세 (코드 + 테스트 케이스 + 채점 결과 readonly)
+│   │
+│   └── /settings                      # 프로젝트 기본 설정
 │
-├ 완료된 프로젝트
-│ └ 완료된 프로젝트 목록
-│ ├ 파일 목록
-│ ├ Excel 파일 내보내기
-│ ├ 채점 시작
-│ ├ 파일 다운로드 및 삭제
-│ └ 프로젝트 상세(파일 수정)
-│ ├ 점수 수동 수정
-│ ├ 코드 실행
-│ └ 조교 코멘트
-│
-└ 프로젝트 생성
-├ 프로젝트(과제)명 입력
-├ 파일 유형 선택
-└ 만점 기준 입력
+└── /account
+    └── /profile                      # 개인 계정 설정
+```
 
-</aside>
+---
 
-<aside>
+## 3. 도메인 정보 구조 (객체 모델)
 
-## 3. 서비스 정책서
+### 3.1 핵심 엔티티 및 속성
 
-## 3.1 파일 업로드 정책
+| 엔티티              | 설명                                | 핵심 속성                                                                                                                                   |
+| ------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **User**            | 조교 계정                           | id, email, name, passwordHash, createdAt                                                                                                    |
+| **Project**         | 하나의 과목/채점 프로젝트           | id, name, description, ownerUserId, createdAt                                                                                               |
+| **Membership**      | 프로젝트별 조교 참여 관계           | id, projectId, userId, role, invitedAt, joinedAt                                                                                            |
+| **ProjectSetting**  | 프로젝트 기본 설정                  | id, projectId, fileNameRule, createdAt, updatedAt                                                                                           |
+| **Submission**      | 업로드된 제출 파일                  | id, projectId, fileName, fileType, filePath, uploadedAt, status(pending/graded), latestGradeRunId                                           |
+| **StudentIdentity** | 제출 파일명에서 추출한 학생 정보    | id, submissionId, studentId, studentName, extractedByRule, isMatched                                                                        |
+| **TestCase**        | 프로젝트 공통 테스트케이스          | id, projectId, input, expectedOutput, weight, timeout, order, createdAt, updatedAt                                                          |
+| **GradeRun**        | 제출 건에 대한 채점 실행 기록       | id, submissionId, projectId, gradedByUserId, testCaseSnapshot, totalAutoScore, gradeRunAt                                                   |
+| **CaseResult**      | 채점 실행 내 개별 테스트케이스 결과 | id, gradeRunId, testCaseId, inputSnapshot, expectedOutputSnapshot, actualOutput, status(passed/failed/runtime_error/timeout), executionTime |
+| **ExportHistory**   | 성적 조회/내보내기 실행 이력        | id, projectId, exportedByUserId, exportType, createdAt                                                                                      |
 
-- 업로드 가능한 파일 형식
-  - `.py`
-  - `.ipynb`
-  - 확장 시 파일 형식 확장 예정
-- 업로드 방식
-  - 다중 파일 업로드 지원
-- 최대 업로드 파일 수
-  - 150개
+### 3.3 엔티티 관계도 (Mermaid ER)
 
-## 3.2 채점 정책
+```mermaid
+erDiagram
+    USER ||--o{ PROJECT : owns
+    USER ||--o{ MEMBERSHIP : "member_of"
+    PROJECT ||--o{ MEMBERSHIP : "part_of"
+    PROJECT ||--o{ SUBMISSION : contains
+    PROJECT ||--o{ TESTCASE : manages
+    SUBMISSION ||--o{ STUDENTIDENTITY : "extracted_from"
+    SUBMISSION ||--o{ GRADERUN : produces
+    SUBMISSION ||--o{ FINALSCORE : "has"
+    SUBMISSION ||--o{ COMMENT : receives
+    GRADERUN ||--o{ CASERESULT : includes
+    TESTCASE ||--o{ CASERESULT : "tested_by"
+    USER ||--o{ COMMENT : created_by
+    USER ||--o{ FINALSCORE : "confirmed_by"
 
-채점은 **테스트 케이스 기반 자동 채점 방식**으로 수행한다.
+    USER {
+        string id PK
+        string email UK
+        string name
+        string password_hash
+        timestamp created_at
+    }
 
-채점 기준
+    PROJECT {
+        string id PK
+        string name
+        string description
+        string ownerUserId FK
+        json settings
+        timestamp created_at
+    }
 
-- 입력값
-- 기대 출력값
-- 테스트 케이스별 점수
-- 실시간 변동 가능
+    MEMBERSHIP {
+        string id PK
+        string userId FK
+        string projectId FK
+        string role
+        timestamp invited_at
+    }
 
-학생 코드의 실행 결과가 기대 출력값과 일치하면 정답으로 처리한다.
+    SUBMISSION {
+        string id PK
+        string projectId FK
+        string fileName
+        string studentId
+        string studentName
+        string filePath
+        string status
+        timestamp uploadedAt
+    }
 
-## 3.3 코드 실행 정책
+    STUDENTIDENTITY {
+        string id PK
+        string submissionId FK
+        string studentId
+        string studentName
+        string extractedFrom
+    }
 
-학생 코드는 격리된 실행 환경(Sandbox)에서 실행한다.
+    TESTCASE {
+        string id PK
+        string projectId FK
+        string input
+        string expectedOutput
+        int weight
+        int timeout
+        int order
+    }
 
-제한 사항
+    GRADERUN {
+        string id PK
+        string submissionId FK
+        json testCaseSnapshot
+        timestamp gradeRunAt
+        string gradedByUserId FK
+    }
 
-- 실행 시간 제한
-- 메모리 사용 제한
-- 네트워크 접근 제한
-- 시스템 파일 접근 제한
+    CASERESULT {
+        string id PK
+        string gradeRunId FK
+        string testCaseId FK
+        string actualOutput
+        string status
+        float executionTime
+    }
 
-Why? 학생들의 코드에 서버 데이터 삭제, 무한 루프 등의 문제 코드가 포함되어 있을 수 있음.
+    FINALSCORE {
+        string id PK
+        string submissionId FK
+        string projectId FK
+        float autoScore
+        float manualAdjustment
+        float finalScore
+        string confirmedByUserId FK
+        timestamp confirmedAt
+    }
 
-</aside>
+    COMMENT {
+        string id PK
+        string submissionId FK
+        string createdByUserId FK
+        int lineNumber
+        string content
+        timestamp createdAt
+    }
+```
 
-<aside>
+---
 
-## 4. 에러 케이스 정의
+## 4. 핵심 플로우 다이어그램
 
-| 에러 상황          | 발생 조건               | 에러 메시지                                       |
-| ------------------ | ----------------------- | ------------------------------------------------- |
-| 파일 업로드 실패   | 지원하지 않는 파일 형식 | 지원되지 않는 파일 형식입니다                     |
-| 파일 업로드 실패   | 파일 크기 초과          | 업로드 가능한 파일 크기를 초과했습니다            |
-| 코드 실행 오류     | SyntaxError             | 코드에 문법 오류가 있습니다 - 0점처리             |
-| 실행 오류          | Runtime Error           | 코드 실행 중 오류가 발생했습니다 - 수동 확인 필요 |
-| 무한 루프          | 실행 시간 초과          | 실행 시간이 제한을 초과했습니다 - 0점처리         |
-| 테스트 케이스 실패 | 출력값 불일치           | 출력 결과가 기대값과 다릅니다                     |
-| Notebook 오류      | ipynb 파싱 실패         | Notebook 파일을 처리할 수 없습니다 - 0점 처리     |
+### 4.1 조교 작업 플로우 (업로드 → 확정 → 내보내기)
 
-</aside>
+```mermaid
+graph TD
+    A["조교 로그인"] --> B["프로젝트 선택"]
+    B --> C{프로젝트가<br/>이미 존재?}
+    C -->|No| D["새 프로젝트 생성<br/>(과제 이름, 파일명규칙)"]
+    C -->|Yes| E["기존 프로젝트 진입"]
+    D --> F["다른 조교 초대"]
+    E --> F
+    F --> G["테스트케이스 설정<br/>(input, expected, weight, timeout)"]
+    G --> H["제출 파일 업로드<br/>(.py / .ipynb)"]
+    H --> I{파일 분류<br/>자동 추출?}
+    I -->|Yes| J["파일명 규칙 기반<br/>학번/이름 추출"]
+    I -->|No| K["수동으로 학생정보 입력"]
+    J --> L
+    K --> L["제출 목록 확인<br/>(정렬/필터)"]
+    L --> M{채점 방식?}
+    M -->|개별| N["제출 선택 → 재채점 실행"]
+    M -->|일괄| O["전체 제출 일괄 채점"]
+    N --> P["채점 결과 검토<br/>(코드 + 테스트케이스별 결과)"]
+    O --> P
+    P --> Q{점수<br/>수정 필요?}
+    Q -->|Yes| R["수동 점수 조정<br/>+ 코멘트 작성"]
+    Q -->|No| S["최종 성적 확정"]
+    R --> S
+    S --> T["성적 내보내기<br/>(Excel)"]
+    T --> U["종료"]
+```
 
-<aside>
+**흐름 설명**: 조교는 프로젝트 생성 → 팀원 초대 → 테스트케이스 설정 → 파일 업로드 및 학생정보 추출 → 채점 실행 → 결과 검토 및 수정 → 최종 확정 → 내보내기의 순환 과정을 거칩니다.
 
-## 5. 상세 기획 (스토리보드)
+---
 
-## 5.1 사용자 흐름
+## 5. 현재 구현 기능 vs 최종 기능 매핑표
 
-조교 로그인/회원가입
-↓
-채점 프로젝트 생성
-↓
-테스트 케이스 등록
-↓
-학생 코드 파일 업로드
-↓
-자동 채점 실행
-↓
-채점 결과 확인
-↓
-점수 수동 수정
-↓
-파일마다 점수 확정 (STATUS 변경)
-↓
-Excel 파일 내보내기
+| 기능명                        | 현재 상태 | 관련 페이지               | 관련 API                            | 관련 서버 모듈                     | 비고                     |
+| ----------------------------- | --------- | ------------------------- | ----------------------------------- | ---------------------------------- | ------------------------ |
+| **파일 업로드 (.py/.ipynb)**  | ✅ 완료   | /submissions              | POST /api/submissions               | SubmissionRepository               |                          |
+| **.ipynb 코드 셀 추출**       | ✅ 완료   | /submissions              | POST /api/submissions               | NotebookConverter                  |                          |
+| **테스트케이스 관리**         | ✅ 완료   | /projects/[id]/settings   | PATCH /api/projects/[id]            | ProjectRepository                  |                          |
+| **Python 실행 + 채점**        | ✅ 완료   | /submissions/[id]         | POST /api/grade                     | GradingEngine                      |                          |
+| **일괄 채점**                 | ✅ 완료   | /batch-grade              | POST /api/grade/batch               | GradingEngine                      |                          |
+| **제출 상세 보기**            | ✅ 완료   | /submissions/[id]         | GET /api/submissions/[id]           | SubmissionRepository               |                          |
+| **파일 다운로드/삭제**        | ✅ 완료   | /submissions              | DELETE /api/submissions             | SubmissionRepository               |                          |
+| **로그인/회원가입**           | ⬜ 미구현 | /auth/login, /auth/signup | POST /api/auth/login, signup        | AuthService                        | JWT 또는 세션 선택 필요  |
+| **프로젝트 생성/관리**        | ⬜ 미구현 | /projects, /projects/[id] | POST/GET/PATCH /api/projects        | ProjectRepository                  | 다중 조교 협업의 기초    |
+| **조교 초대/권한**            | ⬜ 미구현 | /projects/[id]/members    | POST /api/projects/[id]/members     | MembershipService                  | Membership 테이블 필수   |
+| **파일명 규칙 검증**          | ⬜ 미구현 | /projects/[id]/settings   | PATCH /api/projects/[id]            | ProjectRepository                  | 정규식 기반              |
+| **파일명 기반 학생정보 추출** | ⬜ 미구현 | /submissions              | POST /api/submissions               | StudentIdentityExtractor           | 파일명 규칙 선행 필수    |
+| **파일 정렬/필터/순서 변경**  | ⬜ 미구현 | /submissions              | GET /api/submissions (쿼리 확장)    | SubmissionRepository               | 클라이언트 또는 API 정렬 |
+| **점수 수동 수정**            | ⬜ 미구현 | /submissions/[id]/score   | PATCH /api/submissions/[id]/score   | ScoreCalculator, FinalScore 테이블 | 감사 로그 권장           |
+| **코멘트 기능**               | ⬜ 미구현 | /submissions/[id]         | POST /api/submissions/[id]/comments | Comment 테이블                     | 라인번호 기반 추천       |
+| **Excel 내보내기**            | ⬜ 미구현 | /reports/scores           | GET /api/reports/scores (Excel)     | ExcelExporter                      | xlsx 라이브러리          |
+| **대시보드**                  | ⬜ 미구현 | /dashboard                | GET /api/projects                   | ProjectRepository                  | 조교의 프로젝트 목록     |
 
-## 5.2 주요 화면
+---
 
-### 1) 프로젝트 생성 화면
+## 6. 기능 요약
 
-입력 항목
+### 완성형 조교 채점 플랫폼 | 핵심 기능 8개 항목
 
-- 프로젝트 이름
-- 과목명
-- 제출 유형
-- 만점 기준 설정
+**서비스 범위**: 조교 여러 명이 로그인하여 파이썬 과제를 협업으로 자동 채점하고 결과를 관리하는 내부 플랫폼
 
-### 2) 테스트 케이스 설정 화면
+#### 🎯 핵심 기능 구성
 
-입력 항목
+1. **다중 조교 협업**
+   - 조교 로그인/회원가입 → 프로젝트 생성 → 팀원 초대 (owner/editor/viewer 역할)
+   - 각 프로젝트별로 독립적인 테스트케이스 및 제출 관리
 
-- 입력값
-- 기대 출력값
-- 배점
+2. **프로젝트 단위 관리**
+   - 과제별 프로젝트 생성, 파일명 규칙 설정, 테스트케이스 정의
+   - 프로젝트 설정 페이지에서 일괄 관리
 
-### 3) 파일 업로드 화면
+3. **자동 학생정보 추출**
+   - 파일명 규칙(정규식) 기반 자동 파싱 → 학번/이름 추출
+   - 추출 실패 시 수동 입력 가능
 
-기능
+4. **Python 자동 채점 엔진** (현재 구현)
+   - .py/.ipynb 업로드 → .ipynb는 JSON 파싱 후 code cell 추출
+   - 각 테스트케이스를 Node subprocess에서 실행 → stdout 비교 채점
+   - 상태 판정: passed / failed / runtime_error / timeout
 
-- 다중 파일 업로드
-- 업로드 파일 목록 표시
-- 파일명 기반 학생 정보 파싱
+5. **개별 & 일괄 채점**
+   - 제출 상세 페이지에서 재채점 가능
+   - 대량 제출 시 일괄 채점 페이지에서 한 번에 실행
+   - 테스트케이스별 가중치 기반 자동 점수 계산
 
-### 4) 채점 결과 화면
+6. **결과 검토 및 수정**
+   - 제출별 코드(readonly) + 테스트케이스별 통과/실패 표시
+   - 점수 수동 조정 가능
+   - 라인별 코멘트 작성 기능 (피드백)
 
-표 형태로 결과 표시
+7. **성적 확정 및 내보내기**
+   - 자동 점수 + 수동 조정 = 최종 성적
+   - 최종 성적 확정 시 조교명 및 확정 시간 기록
+   - Excel 형식으로 일괄 내보내기
 
-| 학번     | 이름   | 점수 | 상태      |
-| -------- | ------ | ---- | --------- |
-| 6022XXXX | 김영환 | 90   | 정상      |
-| 6020XXXX | 한승훈 | 70   | 부분 실패 |
-| 6022XXXX | 홍건우 | 0    | 실행 오류 |
+8. **제출 파일 관리**
+   - 업로드 목록에서 학생정보/상태/점수 기준 정렬/필터
+   - 파일 다운로드, 선택 삭제
+   - 업로드 시간 및 재채점 이력 추적
 
-</aside>
+---
 
-<aside>
+## 7. API 엔드포인트 전체 명세 (참고)
 
-## 6. 플랫폼 예상 개발 과정
+### 인증
 
-## **6.1 프론트엔드 개발**
+- `POST /api/auth/login` - 로그인
+- `POST /api/auth/signup` - 회원가입
+- `POST /api/auth/logout` - 로그아웃
 
-프론트엔드는 Next.js **기반으로 개발**한다.
+### 프로젝트
 
-주요 구현 기능
+- `GET /api/projects` - 내 프로젝트 목록
+- `POST /api/projects` - 프로젝트 생성
+- `GET /api/projects/[id]` - 프로젝트 상세
+- `PATCH /api/projects/[id]` - 프로젝트 수정 (테스트케이스 포함)
+- `DELETE /api/projects/[id]` - 프로젝트 삭제
 
-- 로그인/회원가입 페이지
-- 채점 프로젝트 생성 UI
-- 테스트 케이스 설정 화면
-- 학생 코드 파일 업로드 UI
-- 자동 채점 실행 화면
-- 채점 결과 테이블
-- 점수 수정 기능
-- Excel 다운로드 기능
+### 조교 초대 및 권한
 
-## 6.2 백엔드 개발
+- `POST /api/projects/[id]/members` - 조교 초대
+- `GET /api/projects/[id]/members` - 조교 목록
+- `PATCH /api/projects/[id]/members/[memberId]` - 권한 수정
+- `DELETE /api/projects/[id]/members/[memberId]` - 조교 제거
 
-백엔드는 Next.js **기반 서버**로 구축한다.
+### 제출 파일
 
-주요 역할
+- `GET /api/projects/[id]/submissions` - 제출 목록 (필터/정렬)
+- `POST /api/projects/[id]/submissions` - 파일 업로드
+- `GET /api/projects/[id]/submissions/[submissionId]` - 제출 상세
+- `PATCH /api/projects/[id]/submissions/[submissionId]` - 학생정보 수정
+- `DELETE /api/projects/[id]/submissions/[submissionId]` - 제출 삭제
+- `GET /api/projects/[id]/submissions/[submissionId]/download` - 파일 다운로드
 
-- 계정 정보 저장
-- 채점 프로젝트 관리 API
-- 테스트 케이스 관리 API
-- 파일 업로드 처리
-- 채점 요청 관리
-- 채점 결과 저장
-- 결과 조회 API 제공
+### 채점
 
-API 구조 관리를 위해 **Swagger 기반 API 문서**를 생성한다.
+- `POST /api/projects/[id]/grade` - 단일 제출 채점
+- `POST /api/projects/[id]/grade/batch` - 일괄 채점
+- `GET /api/projects/[id]/submissions/[submissionId]/gradehistory` - 채점 이력
 
-학생 제출 파일 정보, 채점 결과 데이터 등은 **데이터베이스에 저장하여 관리**
+### 성적
 
-## 6.3 자동 채점 엔진
+- `PATCH /api/projects/[id]/submissions/[submissionId]/score` - 최종 성적 수정
+- `PATCH /api/projects/[id]/submissions/[submissionId]/confirm` - 최종 성적 확정
+- `GET /api/projects/[id]/reports/scores` - 성적 조회/내보내기
 
-자동 채점 기능은 **Python 기반으로 구현**한다.
+### 코멘트(댓글)
 
-Python 채점 엔진의 역할
-
-- 학생 코드 실행
-- 테스트 케이스 입력 전달
-- 코드 실행 결과 수집
-- 기대 출력값과 비교
-- 실행 오류 및 시간 초과 처리
-- 채점 점수 계산
-
-채점 결과는 백엔드 서버로 전달되어 데이터베이스에 저장
-
-## **6.4 전체 시스템 구조**
-
-Frontend (React + TypeScript)
-↓
-Backend (Spring Boot + Swagger API)
-↓
-Python Auto Grading Engine
-↓
-Database (채점 결과 저장)
-
-</aside>
-
-<aside>
-
-## 7. 시퀀스 다이어그램
-
-</aside>
+- `POST /api/projects/[id]/submissions/[submissionId]/comments` - 코멘트 추가
+- `GET /api/projects/[id]/submissions/[submissionId]/comments` - 코멘트 조회
+- `DELETE /api/projects/[id]/submissions/[submissionId]/comments/[commentId]` - 코멘트 삭제
