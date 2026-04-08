@@ -2,24 +2,18 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import TestCaseEditor, { type TestCase } from "@/features/grading/components/TestCaseEditor";
 
 type SubmissionMeta = {
   id: string;
   filename: string;
   extension: ".py" | ".ipynb";
-  uploadedAt: string;
   size: number;
 };
 
 type ApiListResponse = {
   ok: boolean;
   items: SubmissionMeta[];
-};
-
-type TestCase = {
-  input: string;
-  expectedOutput: string;
-  weight: number;
 };
 
 type BatchCaseResult = {
@@ -32,7 +26,6 @@ type BatchSubmissionResult = {
   id: string;
   filename: string;
   extension: ".py" | ".ipynb";
-  uploadedAt: string;
   score: number;
   maxScore: number;
   allPassed: boolean;
@@ -47,10 +40,7 @@ type BatchGradeResponse = {
   submissions: BatchSubmissionResult[];
 };
 
-const DEFAULT_CASES: TestCase[] = [
-  { input: "2", expectedOutput: "4", weight: 5 },
-  { input: "10", expectedOutput: "20", weight: 5 },
-];
+const DEFAULT_CASES: TestCase[] = [{ input: "", expectedOutput: "", weight: "" }];
 
 function shortId(id: string): string {
   return id.slice(0, 8);
@@ -71,7 +61,7 @@ export default function SubmissionUploadList() {
   const [batchResult, setBatchResult] = useState<BatchGradeResponse | null>(null);
 
   const maxScore = useMemo(
-    () => testCases.reduce((acc, item) => acc + (Number.isFinite(item.weight) ? item.weight : 0), 0),
+    () => testCases.reduce((acc, item) => acc + (typeof item.weight === "number" ? item.weight : 0), 0),
     [testCases],
   );
 
@@ -110,7 +100,7 @@ export default function SubmissionUploadList() {
   };
 
   const addCase = () => {
-    setTestCases((prev) => [...prev, { input: "", expectedOutput: "", weight: 1 }]);
+    setTestCases((prev) => [...prev, { input: "", expectedOutput: "", weight: "" }]);
   };
 
   const removeCase = (index: number) => {
@@ -189,7 +179,14 @@ export default function SubmissionUploadList() {
       const response = await fetch("/api/grade/batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ testCases, timeoutMs }),
+        body: JSON.stringify({
+          testCases: testCases.map((item) => ({
+            input: item.input,
+            expectedOutput: item.expectedOutput,
+            weight: item.weight === "" ? undefined : item.weight,
+          })),
+          timeoutMs,
+        }),
       });
 
       const payload = (await response.json()) as BatchGradeResponse | { error: string };
@@ -298,7 +295,7 @@ export default function SubmissionUploadList() {
             <button
               type="submit"
               disabled={isUploading}
-              className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-bold text-slate-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-slate-300"
+              className="min-w-[100px] whitespace-nowrap rounded-xl bg-amber-500 px-4 py-2 text-sm font-bold text-slate-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
               {isUploading ? "업로드 중..." : "파일 업로드"}
             </button>
@@ -308,28 +305,7 @@ export default function SubmissionUploadList() {
         {error && <p className="mt-4 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
 
         <section className="mt-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-extrabold text-slate-900">업로드된 파일 리스트</h2>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-600">선택 {selectedIds.length}개</span>
-              <button
-                type="button"
-                onClick={onDownloadSelected}
-                disabled={selectedIds.length === 0 || isDownloading}
-                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:text-slate-300"
-              >
-                다운로드
-              </button>
-              <button
-                type="button"
-                onClick={onDeleteSelected}
-                disabled={selectedIds.length === 0 || isDeleting}
-                className="inline-flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 disabled:cursor-not-allowed disabled:text-rose-300"
-              >
-                삭제
-              </button>
-            </div>
-          </div>
+          <h2 className="text-lg font-extrabold text-slate-900">업로드된 파일 리스트</h2>
 
           {isLoading ? (
             <p className="mt-2 text-sm text-slate-500">불러오는 중...</p>
@@ -338,10 +314,31 @@ export default function SubmissionUploadList() {
           ) : (
             <ul className="mt-3 space-y-2">
               <li className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700">
-                  <input type="checkbox" checked={allChecked} onChange={toggleAllSelection} className="h-4 w-4" />
-                  전체 선택
-                </label>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700">
+                    <input type="checkbox" checked={allChecked} onChange={toggleAllSelection} className="h-4 w-4" />
+                    전체 선택
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-600">선택 {selectedIds.length}개</span>
+                    <button
+                      type="button"
+                      onClick={onDownloadSelected}
+                      disabled={selectedIds.length === 0 || isDownloading}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:text-slate-300"
+                    >
+                      다운로드
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onDeleteSelected}
+                      disabled={selectedIds.length === 0 || isDeleting}
+                      className="inline-flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 disabled:cursor-not-allowed disabled:text-rose-300"
+                    >
+                      삭제
+                    </button>
+                  </div>
+                </div>
               </li>
               {items.map((item) => (
                 <li key={item.id} className="rounded-xl border border-slate-200 bg-white p-3">
@@ -361,7 +358,7 @@ export default function SubmissionUploadList() {
                       </span>
                     </div>
                     <span className="text-xs text-slate-500">
-                      {item.extension} · {(item.size / 1024).toFixed(1)}KB · {new Date(item.uploadedAt).toLocaleString()}
+                      {item.extension} · {(item.size / 1024).toFixed(1)}KB
                     </span>
                   </div>
                 </li>
@@ -371,59 +368,17 @@ export default function SubmissionUploadList() {
         </section>
 
         <section className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-extrabold text-slate-900">공통 테스트 케이스</h2>
-            <button
-              type="button"
-              onClick={addCase}
-              className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-700"
-            >
-              + 케이스 추가
-            </button>
-          </div>
-
-          <p className="mt-2 text-xs text-slate-600">
+          <p className="mb-2 text-xs text-slate-600">
             규칙: 케이스 하나라도 틀리면 해당 파일 점수는 0점 처리됩니다. (전체 만점: {maxScore})
           </p>
 
-          <div className={`mt-3 space-y-3 ${caseScrollClass}`}>
-            {testCases.map((testCase, index) => (
-              <article key={index} className="rounded-xl border border-slate-200 bg-white p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <strong className="text-xs text-slate-700">Case #{index + 1}</strong>
-                  <button
-                    type="button"
-                    onClick={() => removeCase(index)}
-                    disabled={testCases.length === 1}
-                    className="text-xs text-rose-600 disabled:cursor-not-allowed disabled:text-slate-300"
-                  >
-                    삭제
-                  </button>
-                </div>
-                <textarea
-                  value={testCase.input}
-                  onChange={(e) => updateCase(index, { input: e.target.value })}
-                  placeholder="입력값"
-                  className="mb-2 h-20 w-full resize-none rounded-xl border border-slate-200 p-2 text-xs outline-none ring-amber-300 transition focus:ring-2"
-                />
-                <textarea
-                  value={testCase.expectedOutput}
-                  onChange={(e) => updateCase(index, { expectedOutput: e.target.value })}
-                  placeholder="기대 출력"
-                  className="mb-2 h-20 w-full resize-none rounded-xl border border-slate-200 p-2 text-xs outline-none ring-amber-300 transition focus:ring-2"
-                />
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={testCase.weight}
-                  onChange={(e) => updateCase(index, { weight: Number(e.target.value) })}
-                  className="w-full rounded-xl border border-slate-200 p-2 text-xs outline-none ring-amber-300 transition focus:ring-2"
-                  placeholder="배점"
-                />
-              </article>
-            ))}
-          </div>
+          <TestCaseEditor
+            testCases={testCases}
+            onAddCase={addCase}
+            onRemoveCase={removeCase}
+            onUpdateCase={updateCase}
+            listClassName={`mt-3 space-y-3 ${caseScrollClass}`.trim()}
+          />
 
           <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-2">

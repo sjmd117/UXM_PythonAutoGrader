@@ -2,12 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
-
-type TestCase = {
-  input: string;
-  expectedOutput: string;
-  weight: number;
-};
+import TestCaseEditor, { type TestCase } from "@/features/grading/components/TestCaseEditor";
 
 type GradeResult = {
   index: number;
@@ -39,10 +34,7 @@ type Props = {
   initialCode: string;
 };
 
-const DEFAULT_CASES: TestCase[] = [
-  { input: "2", expectedOutput: "4", weight: 5 },
-  { input: "10", expectedOutput: "20", weight: 5 },
-];
+const DEFAULT_CASES: TestCase[] = [{ input: "", expectedOutput: "", weight: "" }];
 
 export default function GraderWorkspace({ submissionId, filename, initialCode }: Props) {
   const [code] = useState(initialCode);
@@ -53,7 +45,7 @@ export default function GraderWorkspace({ submissionId, filename, initialCode }:
   const [result, setResult] = useState<GradeResponse | null>(null);
 
   const maxScore = useMemo(
-    () => testCases.reduce((acc, tc) => acc + (Number.isFinite(tc.weight) ? tc.weight : 0), 0),
+    () => testCases.reduce((acc, tc) => acc + (typeof tc.weight === "number" ? tc.weight : 0), 0),
     [testCases],
   );
 
@@ -62,7 +54,7 @@ export default function GraderWorkspace({ submissionId, filename, initialCode }:
   };
 
   const addCase = () => {
-    setTestCases((prev) => [...prev, { input: "", expectedOutput: "", weight: 1 }]);
+    setTestCases((prev) => [...prev, { input: "", expectedOutput: "", weight: "" }]);
   };
 
   const removeCase = (index: number) => {
@@ -79,7 +71,15 @@ export default function GraderWorkspace({ submissionId, filename, initialCode }:
       const response = await fetch("/api/grade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, testCases, timeoutMs }),
+        body: JSON.stringify({
+          code,
+          testCases: testCases.map((item) => ({
+            input: item.input,
+            expectedOutput: item.expectedOutput,
+            weight: item.weight === "" ? undefined : item.weight,
+          })),
+          timeoutMs,
+        }),
       });
 
       const payload = (await response.json()) as GradeResponse | { error: string };
@@ -125,55 +125,13 @@ export default function GraderWorkspace({ submissionId, filename, initialCode }:
           </section>
 
           <section className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-700">테스트 케이스</h2>
-              <button
-                type="button"
-                onClick={addCase}
-                className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-700"
-              >
-                + 추가
-              </button>
-            </div>
-
-            <div className="max-h-[355px] space-y-3 overflow-y-auto pr-1">
-              {testCases.map((testCase, index) => (
-                <article key={index} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-                  <div className="mb-2 flex items-center justify-between">
-                    <strong className="text-xs text-slate-700">Case #{index + 1}</strong>
-                    <button
-                      type="button"
-                      onClick={() => removeCase(index)}
-                      disabled={testCases.length === 1}
-                      className="text-xs text-rose-600 disabled:cursor-not-allowed disabled:text-slate-300"
-                    >
-                      삭제
-                    </button>
-                  </div>
-                  <textarea
-                    value={testCase.input}
-                    onChange={(e) => updateCase(index, { input: e.target.value })}
-                    placeholder="입력값"
-                    className="mb-2 h-20 w-full resize-none rounded-xl border border-slate-200 p-2 text-xs outline-none ring-amber-300 transition focus:ring-2"
-                  />
-                  <textarea
-                    value={testCase.expectedOutput}
-                    onChange={(e) => updateCase(index, { expectedOutput: e.target.value })}
-                    placeholder="기대 출력"
-                    className="mb-2 h-20 w-full resize-none rounded-xl border border-slate-200 p-2 text-xs outline-none ring-amber-300 transition focus:ring-2"
-                  />
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={testCase.weight}
-                    onChange={(e) => updateCase(index, { weight: Number(e.target.value) })}
-                    className="w-full rounded-xl border border-slate-200 p-2 text-xs outline-none ring-amber-300 transition focus:ring-2"
-                    placeholder="배점"
-                  />
-                </article>
-              ))}
-            </div>
+            <TestCaseEditor
+              testCases={testCases}
+              onAddCase={addCase}
+              onRemoveCase={removeCase}
+              onUpdateCase={updateCase}
+              listClassName="max-h-[355px] space-y-3 overflow-y-auto pr-1"
+            />
 
             <label className="block text-sm font-semibold text-slate-700" htmlFor="timeout">
               케이스별 제한 시간(ms)
@@ -206,17 +164,14 @@ export default function GraderWorkspace({ submissionId, filename, initialCode }:
           <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-4">
             <h3 className="text-lg font-black text-slate-900">채점 결과</h3>
             <p className="mt-1 text-sm text-slate-600">
-              점수 {result.summary.totalScore} / {result.summary.maxScore} · 통과 {result.summary.passedCount} / {" "}
-              {result.summary.totalCount} · 실행기: {result.pythonCommand}
+              점수 {result.summary.totalScore} / {result.summary.maxScore} · 통과 {result.summary.passedCount} / {result.summary.totalCount} · 실행기: {result.pythonCommand}
             </p>
 
             <div className="mt-4 space-y-2">
               {result.results.map((item) => (
                 <article
                   key={item.index}
-                  className={`rounded-xl border p-3 text-sm ${
-                    item.passed ? "border-emerald-300 bg-emerald-50" : "border-rose-300 bg-rose-50"
-                  }`}
+                  className={`rounded-xl border p-3 text-sm ${item.passed ? "border-emerald-300 bg-emerald-50" : "border-rose-300 bg-rose-50"}`}
                 >
                   <p className="font-semibold">
                     Case #{item.index + 1} · {item.scoreEarned}/{item.scoreTotal}점 · {item.status} · {item.runtimeMs}ms
