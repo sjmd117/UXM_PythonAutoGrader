@@ -40,7 +40,11 @@ type BatchGradeResponse = {
   submissions: BatchSubmissionResult[];
 };
 
-const DEFAULT_CASES: TestCase[] = [{ input: "", expectedOutput: "", weight: "" }];
+const createDefaultCase = (): TestCase => ({
+  input: "",
+  expectedOutput: "",
+  weight: "",
+});
 
 function shortId(id: string): string {
   return id.slice(0, 8);
@@ -56,7 +60,7 @@ export default function SubmissionUploadList() {
   const [error, setError] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [testCases, setTestCases] = useState<TestCase[]>(DEFAULT_CASES);
+  const [testCases, setTestCases] = useState<TestCase[]>([createDefaultCase()]);
   const [timeoutMs, setTimeoutMs] = useState(2000);
   const [batchResult, setBatchResult] = useState<BatchGradeResponse | null>(null);
 
@@ -100,7 +104,7 @@ export default function SubmissionUploadList() {
   };
 
   const addCase = () => {
-    setTestCases((prev) => [...prev, { input: "", expectedOutput: "", weight: "" }]);
+    setTestCases((prev) => [...prev, createDefaultCase()]);
   };
 
   const removeCase = (index: number) => {

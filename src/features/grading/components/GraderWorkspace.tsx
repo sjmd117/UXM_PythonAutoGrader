@@ -34,11 +34,15 @@ type Props = {
   initialCode: string;
 };
 
-const DEFAULT_CASES: TestCase[] = [{ input: "", expectedOutput: "", weight: "" }];
+const createDefaultCase = (): TestCase => ({
+  input: "",
+  expectedOutput: "",
+  weight: "",
+});
 
 export default function GraderWorkspace({ submissionId, filename, initialCode }: Props) {
   const [code] = useState(initialCode);
-  const [testCases, setTestCases] = useState(DEFAULT_CASES);
+  const [testCases, setTestCases] = useState<TestCase[]>([createDefaultCase()]);
   const [timeoutMs, setTimeoutMs] = useState(2000);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,7 +58,7 @@ export default function GraderWorkspace({ submissionId, filename, initialCode }:
   };
 
   const addCase = () => {
-    setTestCases((prev) => [...prev, { input: "", expectedOutput: "", weight: "" }]);
+    setTestCases((prev) => [...prev, createDefaultCase()]);
   };
 
   const removeCase = (index: number) => {

@@ -82,6 +82,48 @@ function normalizeOutput(text: string): string {
     .trim();
 }
 
+function normalizeFlexibleWhitespace(text: string): string {
+  return normalizeOutput(text).replace(/\s+/g, " ").trim();
+}
+
+function extractTokens(text: string): string[] {
+  return normalizeFlexibleWhitespace(text)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function extractNumbers(text: string): number[] {
+  const matches = normalizeOutput(text).match(/[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) ?? [];
+  return matches.map(Number).filter(Number.isFinite);
+}
+
+function numbersAreEqual(expected: number[], actual: number[]): boolean {
+  if (expected.length === 0 || expected.length !== actual.length) {
+    return false;
+  }
+
+  return expected.every((value, index) => Math.abs(value - actual[index]) <= 1e-9);
+}
+
+function tokenSubsetMatches(expected: string, actual: string): boolean {
+  const tokens = extractTokens(expected);
+  const normalizedActual = normalizeFlexibleWhitespace(actual);
+  return tokens.length > 0 && tokens.every((token) => normalizedActual.includes(token));
+}
+
+function numberSequenceMatches(expected: string, actual: string): boolean {
+  return numbersAreEqual(extractNumbers(expected), extractNumbers(actual));
+}
+
+function compareOutputLeniently(expected: string, actual: string): boolean {
+  return (
+    normalizeFlexibleWhitespace(actual) === normalizeFlexibleWhitespace(expected) ||
+    tokenSubsetMatches(expected, actual) ||
+    numberSequenceMatches(expected, actual)
+  );
+}
+
 function parseWeight(weight?: number): number {
   if (typeof weight !== "number" || !Number.isFinite(weight) || weight < 0) {
     return 1;
@@ -220,7 +262,7 @@ export async function gradeCodeAgainstCases(params: {
       const expected = normalizeOutput(typeof testCase.expectedOutput === "string" ? testCase.expectedOutput : "");
       const actual = normalizeOutput(stripInputPrompts(execution.stdout, prompts));
 
-      const passed = execution.status === "ok" && actual === expected;
+      const passed = execution.status === "ok" && compareOutputLeniently(expected, actual);
       if (passed) {
         passedCount += 1;
       }
