@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
 import TestCaseEditor, { type TestCase } from "@/features/grading/components/TestCaseEditor";
+import { useStoredState } from "@/lib/use-stored-state";
 
 type GradeResult = {
   index: number;
@@ -40,13 +41,18 @@ const createDefaultCase = (): TestCase => ({
   weight: "",
 });
 
+const DEFAULT_TEST_CASES = [createDefaultCase()];
+
 export default function GraderWorkspace({ submissionId, filename, initialCode }: Props) {
   const [code] = useState(initialCode);
-  const [testCases, setTestCases] = useState<TestCase[]>([createDefaultCase()]);
-  const [timeoutMs, setTimeoutMs] = useState(2000);
+  const [testCases, setTestCases] = useStoredState<TestCase[]>(
+    `uxm-grader:submission:${submissionId}:test-cases`,
+    DEFAULT_TEST_CASES,
+  );
+  const [timeoutMs, setTimeoutMs] = useStoredState(`uxm-grader:submission:${submissionId}:timeout-ms`, 2000);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<GradeResponse | null>(null);
+  const [result, setResult] = useStoredState<GradeResponse | null>(`uxm-grader:submission:${submissionId}:result`, null);
 
   const maxScore = useMemo(
     () => testCases.reduce((acc, tc) => acc + (typeof tc.weight === "number" ? tc.weight : 0), 0),
@@ -172,23 +178,28 @@ export default function GraderWorkspace({ submissionId, filename, initialCode }:
             </p>
 
             <div className="mt-4 space-y-2">
-              {result.results.map((item) => (
-                <article
-                  key={item.index}
-                  className={`rounded-xl border p-3 text-sm ${item.passed ? "border-emerald-300 bg-emerald-50" : "border-rose-300 bg-rose-50"}`}
-                >
-                  <p className="font-semibold">
-                    Case #{item.index + 1} · {item.scoreEarned}/{item.scoreTotal}점 · {item.status} · {item.runtimeMs}ms
-                  </p>
-                  {!item.passed && (
-                    <>
-                      <p className="mt-1 whitespace-pre-wrap">expected: {item.expectedOutput || "(빈 값)"}</p>
-                      <p className="mt-1 whitespace-pre-wrap">actual: {item.actualOutput || "(빈 값)"}</p>
-                    </>
-                  )}
-                  {item.error && <p className="mt-1 whitespace-pre-wrap text-rose-700">error: {item.error}</p>}
-                </article>
-              ))}
+              {result.results.map((item) => {
+                const input = testCases[item.index]?.input ?? "";
+
+                return (
+                  <article
+                    key={item.index}
+                    className={`rounded-xl border p-3 text-sm ${item.passed ? "border-emerald-300 bg-emerald-50" : "border-rose-300 bg-rose-50"}`}
+                  >
+                    <p className="font-semibold">
+                      Case #{item.index + 1} · {item.scoreEarned}/{item.scoreTotal}점 · {item.status} · {item.runtimeMs}ms
+                    </p>
+                    {!item.passed && (
+                      <>
+                        <p className="mt-1 whitespace-pre-wrap">input: {input || "(빈 값)"}</p>
+                        <p className="mt-1 whitespace-pre-wrap">expected: {item.expectedOutput || "(빈 값)"}</p>
+                        <p className="mt-1 whitespace-pre-wrap">actual: {item.actualOutput || "(빈 값)"}</p>
+                      </>
+                    )}
+                    {item.error && <p className="mt-1 whitespace-pre-wrap text-rose-700">error: {item.error}</p>}
+                  </article>
+                );
+              })}
             </div>
           </section>
         )}

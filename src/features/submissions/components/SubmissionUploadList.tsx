@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import TestCaseEditor, { type TestCase } from "@/features/grading/components/TestCaseEditor";
+import { useStoredState, writeStoredValue } from "@/lib/use-stored-state";
 
 type SubmissionMeta = {
   id: string;
@@ -19,6 +20,12 @@ type ApiListResponse = {
 type BatchCaseResult = {
   index: number;
   passed: boolean;
+  scoreEarned: number;
+  scoreTotal: number;
+  actualOutput: string;
+  expectedOutput: string;
+  error?: string;
+  runtimeMs: number;
   status: "passed" | "failed" | "runtime_error" | "timeout";
 };
 
@@ -40,14 +47,126 @@ type BatchGradeResponse = {
   submissions: BatchSubmissionResult[];
 };
 
+type StoredGradeResponse = {
+  ok: boolean;
+  summary: {
+    totalScore: number;
+    maxScore: number;
+    passedCount: number;
+    totalCount: number;
+  };
+  results: BatchCaseResult[];
+  pythonCommand: string;
+};
+
+type ParsedStudentSubmission = {
+  item: SubmissionMeta;
+  studentId: string;
+  name: string;
+};
+
+type UnmatchedStudentSubmission = {
+  item: SubmissionMeta;
+  reason: string;
+};
+
+type ManualStudentInfo = {
+  studentId: string;
+  name: string;
+};
+
+type ManualStudentInfoMap = Record<string, ManualStudentInfo>;
+
 const createDefaultCase = (): TestCase => ({
   input: "",
   expectedOutput: "",
   weight: "",
 });
 
+const DEFAULT_TEST_CASES = [createDefaultCase()];
+
+const STORAGE_KEYS = {
+  testCases: "uxm-grader:batch:test-cases",
+  timeoutMs: "uxm-grader:batch:timeout-ms",
+  result: "uxm-grader:batch:result",
+  manualStudentInfo: "uxm-grader:submissions:manual-student-info",
+};
+
+const submissionStorageKeys = (submissionId: string) => ({
+  testCases: `uxm-grader:submission:${submissionId}:test-cases`,
+  timeoutMs: `uxm-grader:submission:${submissionId}:timeout-ms`,
+  result: `uxm-grader:submission:${submissionId}:result`,
+});
+
 function shortId(id: string): string {
   return id.slice(0, 8);
+}
+
+function removeExtension(filename: string): string {
+  return filename.normalize("NFC").replace(/\.(ipynb|py)$/i, "");
+}
+
+function removeDuplicateSuffix(filenameWithoutExtension: string): string {
+  return filenameWithoutExtension.replace(/\s*\(\d+\)\s*$/u, "").trim();
+}
+
+function classifySubmissionFilename(item: SubmissionMeta): ParsedStudentSubmission | UnmatchedStudentSubmission {
+  const normalizedName = removeDuplicateSuffix(removeExtension(item.filename)).normalize("NFC");
+  const studentIdMatch = normalizedName.match(/(?:^|_)(60\d{6})(?:_|$)/u);
+
+  if (!studentIdMatch) {
+    return {
+      item,
+      reason: "60으로 시작하는 8자리 학번을 찾지 못했습니다.",
+    };
+  }
+
+  const studentId = studentIdMatch[1];
+  const expectedTail = `_${studentId}_`;
+  const tailStart = normalizedName.lastIndexOf(expectedTail);
+
+  if (tailStart === -1) {
+    return {
+      item,
+      reason: "학번 앞뒤 구분자가 규칙과 다릅니다.",
+    };
+  }
+
+  const name = normalizedName.slice(tailStart + expectedTail.length).trim().normalize("NFC");
+  if (name.length === 0) {
+    return {
+      item,
+      reason: "학번 뒤 이름을 찾지 못했습니다.",
+    };
+  }
+
+  return {
+    item,
+    studentId,
+    name,
+  };
+}
+
+function saveBatchResultsForDetailPages(payload: BatchGradeResponse, testCases: TestCase[], timeoutMs: number) {
+  for (const submission of payload.submissions) {
+    const keys = submissionStorageKeys(submission.id);
+    const passedCount = submission.results.filter((item) => item.passed).length;
+    const detailResult: StoredGradeResponse = {
+      ok: true,
+      pythonCommand: payload.pythonCommand,
+      results: submission.results,
+      summary: {
+        totalScore: submission.score,
+        maxScore: submission.maxScore,
+        passedCount,
+        totalCount: submission.results.length,
+      },
+    };
+
+    writeStoredValue(keys.testCases, testCases);
+    writeStoredValue(keys.timeoutMs, timeoutMs);
+    writeStoredValue(keys.result, detailResult);
+  }
 }
 
 export default function SubmissionUploadList() {
@@ -60,9 +179,10 @@ export default function SubmissionUploadList() {
   const [error, setError] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [testCases, setTestCases] = useState<TestCase[]>([createDefaultCase()]);
-  const [timeoutMs, setTimeoutMs] = useState(2000);
-  const [batchResult, setBatchResult] = useState<BatchGradeResponse | null>(null);
+  const [testCases, setTestCases] = useStoredState<TestCase[]>(STORAGE_KEYS.testCases, DEFAULT_TEST_CASES);
+  const [timeoutMs, setTimeoutMs] = useStoredState(STORAGE_KEYS.timeoutMs, 2000);
+  const [batchResult, setBatchResult] = useStoredState<BatchGradeResponse | null>(STORAGE_KEYS.result, null);
+  const [manualStudentInfo, setManualStudentInfo] = useStoredState<ManualStudentInfoMap>(STORAGE_KEYS.manualStudentInfo, {});
 
   const maxScore = useMemo(
     () => testCases.reduce((acc, item) => acc + (typeof item.weight === "number" ? item.weight : 0), 0),
@@ -99,6 +219,14 @@ export default function SubmissionUploadList() {
     void run();
   }, []);
 
+  useEffect(() => {
+    if (!batchResult) {
+      return;
+    }
+
+    saveBatchResultsForDetailPages(batchResult, testCases, timeoutMs);
+  }, [batchResult, testCases, timeoutMs]);
+
   const updateCase = (index: number, patch: Partial<TestCase>) => {
     setTestCases((prev) => prev.map((tc, i) => (i === index ? { ...tc, ...patch } : tc)));
   };
@@ -109,6 +237,17 @@ export default function SubmissionUploadList() {
 
   const removeCase = (index: number) => {
     setTestCases((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const updateManualStudentInfo = (id: string, patch: Partial<ManualStudentInfo>) => {
+    setManualStudentInfo((prev) => ({
+      ...prev,
+      [id]: {
+        studentId: prev[id]?.studentId ?? "",
+        name: prev[id]?.name ?? "",
+        ...patch,
+      },
+    }));
   };
 
   const toggleSelection = (id: string) => {
@@ -199,6 +338,7 @@ export default function SubmissionUploadList() {
       }
 
       setBatchResult(payload);
+      saveBatchResultsForDetailPages(payload, testCases, timeoutMs);
     } catch (gradeError) {
       setError(gradeError instanceof Error ? gradeError.message : "채점 중 오류가 발생했습니다.");
     } finally {
@@ -316,58 +456,116 @@ export default function SubmissionUploadList() {
           ) : items.length === 0 ? (
             <p className="mt-2 text-sm text-slate-500">아직 업로드된 파일이 없습니다.</p>
           ) : (
-            <ul className="mt-3 space-y-2">
-              <li className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700">
-                    <input type="checkbox" checked={allChecked} onChange={toggleAllSelection} className="h-4 w-4" />
-                    전체 선택
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-600">선택 {selectedIds.length}개</span>
-                    <button
-                      type="button"
-                      onClick={onDownloadSelected}
-                      disabled={selectedIds.length === 0 || isDownloading}
-                      className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:text-slate-300"
-                    >
-                      다운로드
-                    </button>
-                    <button
-                      type="button"
-                      onClick={onDeleteSelected}
-                      disabled={selectedIds.length === 0 || isDeleting}
-                      className="inline-flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 disabled:cursor-not-allowed disabled:text-rose-300"
-                    >
-                      삭제
-                    </button>
-                  </div>
+            <>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700">
+                  <input type="checkbox" checked={allChecked} onChange={toggleAllSelection} className="h-4 w-4" />
+                  전체 선택
+                </label>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-600">선택 {selectedIds.length}개</span>
+                  <button
+                    type="button"
+                    onClick={onDownloadSelected}
+                    disabled={selectedIds.length === 0 || isDownloading}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:text-slate-300"
+                  >
+                    다운로드
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onDeleteSelected}
+                    disabled={selectedIds.length === 0 || isDeleting}
+                    className="inline-flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 disabled:cursor-not-allowed disabled:text-rose-300"
+                  >
+                    삭제
+                  </button>
                 </div>
-              </li>
-              {items.map((item) => (
-                <li key={item.id} className="rounded-xl border border-slate-200 bg-white p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="inline-flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(item.id)}
-                        onChange={() => toggleSelection(item.id)}
-                        className="h-4 w-4"
-                      />
-                      <Link href={`/submissions/${item.id}`} className="text-sm font-semibold text-blue-700 underline-offset-2 hover:underline">
-                        {item.filename}
-                      </Link>
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                        ID {shortId(item.id)}
-                      </span>
-                    </div>
-                    <span className="text-xs text-slate-500">
-                      {item.extension} · {(item.size / 1024).toFixed(1)}KB
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ul>
+              </div>
+              <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                <table className="min-w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-slate-100 text-left text-slate-700">
+                      <th className="px-3 py-2">선택</th>
+                      <th className="px-3 py-2">파일명</th>
+                      <th className="px-3 py-2">학번</th>
+                      <th className="px-3 py-2">이름</th>
+                      <th className="px-3 py-2">상태</th>
+                      <th className="px-3 py-2">파일 정보</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((item) => {
+                      const classified = classifySubmissionFilename(item);
+                      const isMatched = "studentId" in classified;
+                      const manualInfo = manualStudentInfo[item.id] ?? { studentId: "", name: "" };
+                      const hasManualInfo = manualInfo.studentId.trim().length > 0 && manualInfo.name.trim().length > 0;
+
+                      return (
+                        <tr key={item.id} className="border-b border-slate-100 last:border-b-0">
+                          <td className="px-3 py-2">
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.includes(item.id)}
+                              onChange={() => toggleSelection(item.id)}
+                              className="h-4 w-4"
+                              aria-label={`${item.filename} 선택`}
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Link href={`/submissions/${item.id}`} className="font-semibold text-blue-700 underline-offset-2 hover:underline">
+                                {item.filename}
+                              </Link>
+                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                                ID {shortId(item.id)}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2">
+                            {isMatched ? (
+                              <span className="font-semibold text-slate-900">{classified.studentId}</span>
+                            ) : (
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                value={manualInfo.studentId}
+                                onChange={(event) => updateManualStudentInfo(item.id, { studentId: event.target.value })}
+                                className="w-28 rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-900 outline-none ring-amber-300 transition focus:ring-2"
+                                placeholder="학번"
+                              />
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            {isMatched ? (
+                              <span className="font-semibold text-slate-900">{classified.name}</span>
+                            ) : (
+                              <input
+                                type="text"
+                                value={manualInfo.name}
+                                onChange={(event) => updateManualStudentInfo(item.id, { name: event.target.value.normalize("NFC") })}
+                                className="w-24 rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-900 outline-none ring-amber-300 transition focus:ring-2"
+                                placeholder="이름"
+                              />
+                            )}
+                          </td>
+                          <td
+                            className={`px-3 py-2 text-xs font-semibold ${
+                              isMatched || hasManualInfo ? "text-emerald-700" : "text-rose-700"
+                            }`}
+                          >
+                            {isMatched ? "자동 추출" : hasManualInfo ? "직접 입력" : classified.reason}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-500">
+                            {item.extension} · {(item.size / 1024).toFixed(1)}KB
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </section>
 
