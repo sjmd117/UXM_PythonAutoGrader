@@ -1,29 +1,62 @@
 ﻿import { promises as fs } from "node:fs";
 import crypto from "node:crypto";
 import path from "node:path";
+import { unzipSync } from "fflate";
+import { repairFilenameMojibake } from "@/lib/repair-filename";
 
 export type SubmissionMeta = {
   id: string;
   filename: string;
   extension: ".py" | ".ipynb";
   size: number;
+  studentId?: string;
+  studentName?: string;
+  identitySource?: "zip" | "filename";
+  zipOwnerName?: string;
+};
+
+export type NotebookCodeCell = {
+  id: string;
+  index: number;
+  source: string;
 };
 
 export type SubmissionDetail = SubmissionMeta & {
   code: string;
+  notebookCells?: NotebookCodeCell[];
 };
 
 export type SubmissionSource = SubmissionMeta & {
   content: string;
 };
 
+export type SkippedSubmission = {
+  filename: string;
+  reason: string;
+};
+
+export type SubmissionUploadResult = {
+  created: SubmissionMeta[];
+  skipped: SkippedSubmission[];
+};
+
 type SubmissionIndex = {
   items: SubmissionMeta[];
+};
+
+type StudentIdentity = {
+  studentId: string;
+  studentName: string;
+  identitySource: "zip" | "filename";
 };
 
 const DATA_ROOT = path.join(process.cwd(), "data", "submissions");
 const INDEX_PATH = path.join(DATA_ROOT, "index.json");
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
+const MAX_ZIP_FILE_SIZE = 50 * 1024 * 1024;
+const MAX_ZIP_ENTRY_SIZE = 2 * 1024 * 1024;
+const MAX_ZIP_SUBMISSIONS = 500;
+const EMPTY_NOTEBOOK_MESSAGE = "ipynb 안에 실행 가능한 code cell이 없습니다.";
 
 function extOf(name: string): ".py" | ".ipynb" | null {
   const lower = name.toLowerCase();
@@ -36,6 +69,20 @@ function extOf(name: string): ".py" | ".ipynb" | null {
   return null;
 }
 
+function isZipFile(name: string): boolean {
+  return name.toLowerCase().endsWith(".zip");
+}
+
+function basenameFromZipPath(name: string): string {
+  const normalized = name.replace(/\\/g, "/");
+  return normalized.split("/").filter(Boolean).at(-1) ?? normalized;
+}
+
+function isZipMetadataEntry(entryName: string, filename: string): boolean {
+  const normalized = entryName.replace(/\\/g, "/");
+  return normalized.startsWith("__MACOSX/") || filename.startsWith("._");
+}
+
 function sanitizeFilename(name: string): string {
   return name.replace(/[\\/:*?"<>|]+/g, "_").trim() || "submission.py";
 }
@@ -46,11 +93,36 @@ function splitNameAndExt(filename: string): { name: string; ext: string } {
   return { name, ext };
 }
 
+function stripExtension(filename: string): string {
+  const ext = path.extname(filename);
+  return filename.slice(0, Math.max(0, filename.length - ext.length));
+}
+
+function parseStudentIdentityFromZipOwner(ownerName: string): StudentIdentity | null {
+  const normalized = stripExtension(ownerName).normalize("NFC");
+  const matched = normalized.match(/^(.+?)-(\d{8})(?:_|$)/u);
+  if (!matched) {
+    return null;
+  }
+
+  const studentName = matched[1].trim().normalize("NFC");
+  const studentId = matched[2];
+  if (!studentName) {
+    return null;
+  }
+
+  return {
+    studentId,
+    studentName,
+    identitySource: "zip",
+  };
+}
+
 function dedupeFilename(filename: string, existing: SubmissionMeta[]): string {
   const existingLower = new Set(
-    existing.map((item) => item.filename.toLowerCase()),
+    existing.map((item) => repairFilenameMojibake(item.filename).toLowerCase()),
   );
-  if (!existingLower.has(filename.toLowerCase())) {
+  if (!existingLower.has(repairFilenameMojibake(filename).toLowerCase())) {
     return filename;
   }
 
@@ -58,7 +130,7 @@ function dedupeFilename(filename: string, existing: SubmissionMeta[]): string {
   let seq = 2;
   while (true) {
     const candidate = `${name} (${seq})${ext}`;
-    if (!existingLower.has(candidate.toLowerCase())) {
+    if (!existingLower.has(repairFilenameMojibake(candidate).toLowerCase())) {
       return candidate;
     }
     seq += 1;
@@ -128,9 +200,7 @@ function parseNotebookJson(buffer: Buffer): unknown {
   );
 }
 
-function notebookToPython(notebookBuffer: Buffer): string {
-  const parsed = parseNotebookJson(notebookBuffer);
-
+function extractNotebookCodeCells(parsed: unknown): NotebookCodeCell[] {
   if (!parsed || typeof parsed !== "object" || !("cells" in parsed)) {
     throw new Error("유효한 ipynb 파일이 아닙니다.");
   }
@@ -140,7 +210,7 @@ function notebookToPython(notebookBuffer: Buffer): string {
     throw new Error("ipynb cells 구조가 올바르지 않습니다.");
   }
 
-  const codeChunks: string[] = [];
+  const codeCells: NotebookCodeCell[] = [];
   for (const cell of cells) {
     if (!cell || typeof cell !== "object") {
       continue;
@@ -151,24 +221,49 @@ function notebookToPython(notebookBuffer: Buffer): string {
       continue;
     }
 
+    const cellId = (cell as { id?: unknown }).id;
     const source = (cell as { source?: unknown }).source;
+    let code = "";
     if (Array.isArray(source)) {
-      const lines = source
+      code = source
         .map((line) => (typeof line === "string" ? line : ""))
         .join("");
-      codeChunks.push(lines);
-      continue;
+    } else if (typeof source === "string") {
+      code = source;
     }
-    if (typeof source === "string") {
-      codeChunks.push(source);
+
+    if (code.trim()) {
+      codeCells.push({
+        id: typeof cellId === "string" && cellId.trim() ? cellId : `cell-${codeCells.length + 1}`,
+        index: codeCells.length,
+        source: code,
+      });
     }
   }
 
-  const merged = codeChunks.join("\n\n").trim();
+  return codeCells;
+}
+
+function notebookToPython(notebookBuffer: Buffer): string {
+  const parsed = parseNotebookJson(notebookBuffer);
+  const codeCells = extractNotebookCodeCells(parsed);
+  const merged = codeCells.map((cell) => cell.source).join("\n\n").trim();
   if (!merged) {
-    throw new Error("ipynb 안에 실행 가능한 code cell이 없습니다.");
+    throw new Error(EMPTY_NOTEBOOK_MESSAGE);
   }
   return merged;
+}
+
+function notebookCellsFromContent(content: string): NotebookCodeCell[] | undefined {
+  try {
+    return extractNotebookCodeCells(parseNotebookJson(Buffer.from(content, "utf8")));
+  } catch {
+    return undefined;
+  }
+}
+
+function isEmptyNotebookError(error: unknown): boolean {
+  return error instanceof Error && error.message === EMPTY_NOTEBOOK_MESSAGE;
 }
 
 async function ensureStore() {
@@ -244,6 +339,143 @@ export async function createSubmissionFromFile(
   return item;
 }
 
+async function createSubmissionFromBuffer(params: {
+  filename: string;
+  rawBuffer: Buffer;
+  size: number;
+  studentIdentity?: StudentIdentity | null;
+  zipOwnerName?: string;
+}): Promise<SubmissionMeta> {
+  const rawName = sanitizeFilename(params.filename);
+  const extension = extOf(rawName);
+
+  if (!extension) {
+    throw new Error(".py 또는 .ipynb 파일만 업로드할 수 있습니다.");
+  }
+
+  if (params.size > MAX_FILE_SIZE) {
+    throw new Error("파일 크기는 최대 2MB까지 허용됩니다.");
+  }
+
+  const content = decodeTextWithFallback(params.rawBuffer);
+  const code = extension === ".ipynb" ? notebookToPython(params.rawBuffer) : content;
+
+  if (!code.trim()) {
+    throw new Error("빈 코드 파일은 업로드할 수 없습니다.");
+  }
+
+  const id = crypto.randomUUID();
+  await ensureStore();
+  const index = await readIndex();
+  const filename = dedupeFilename(rawName, index.items);
+
+  const sourcePath = path.join(DATA_ROOT, `${id}${extension}`);
+  const codePath = path.join(DATA_ROOT, `${id}.code.py`);
+  await fs.writeFile(sourcePath, content, "utf8");
+  await fs.writeFile(codePath, code, "utf8");
+
+  const item: SubmissionMeta = {
+    id,
+    filename,
+    extension,
+    size: params.size,
+    ...(params.zipOwnerName ? { zipOwnerName: params.zipOwnerName } : {}),
+    ...(params.studentIdentity
+      ? {
+          studentId: params.studentIdentity.studentId,
+          studentName: params.studentIdentity.studentName,
+          identitySource: params.studentIdentity.identitySource,
+        }
+      : {}),
+  };
+
+  index.items.push(item);
+  await writeIndex(index);
+  return item;
+}
+
+export async function createSubmissionsFromUpload(file: File): Promise<SubmissionUploadResult> {
+  if (!isZipFile(file.name)) {
+    try {
+      return {
+        created: [await createSubmissionFromFile(file)],
+        skipped: [],
+      };
+    } catch (error) {
+      if (isEmptyNotebookError(error)) {
+        return {
+          created: [],
+          skipped: [{ filename: sanitizeFilename(file.name), reason: EMPTY_NOTEBOOK_MESSAGE }],
+        };
+      }
+      throw error;
+    }
+  }
+
+  if (file.size > MAX_ZIP_FILE_SIZE) {
+    throw new Error("zip 파일 크기는 최대 50MB까지 허용됩니다.");
+  }
+
+  const zipBuffer = Buffer.from(await file.arrayBuffer());
+  const zipBaseName = sanitizeFilename(stripExtension(file.name));
+  const entries = unzipSync(zipBuffer);
+  const candidates = Object.entries(entries)
+    .map(([rawEntryName, data]) => {
+      const entryName = repairFilenameMojibake(rawEntryName);
+      return {
+        entryName,
+        filename: sanitizeFilename(basenameFromZipPath(entryName)),
+        ownerName: zipBaseName,
+        data,
+      };
+    })
+    .filter(({ entryName, filename, data }) => {
+      const isDirectory = entryName.endsWith("/") || data.length === 0;
+      return !isDirectory && !isZipMetadataEntry(entryName, filename) && extOf(filename) !== null;
+    });
+
+  if (candidates.length === 0) {
+    throw new Error("zip 안에서 .py 또는 .ipynb 파일을 찾지 못했습니다.");
+  }
+
+  if (candidates.length > MAX_ZIP_SUBMISSIONS) {
+    throw new Error(`zip 안의 제출 파일은 최대 ${MAX_ZIP_SUBMISSIONS}개까지 허용됩니다.`);
+  }
+
+  const created: SubmissionMeta[] = [];
+  const skipped: SkippedSubmission[] = [];
+  for (const candidate of candidates) {
+    if (candidate.data.length > MAX_ZIP_ENTRY_SIZE) {
+      throw new Error(`${candidate.filename} 파일 크기는 최대 2MB까지 허용됩니다.`);
+    }
+
+    const extension = extOf(candidate.filename);
+    if (!extension) {
+      continue;
+    }
+    const studentIdentity = parseStudentIdentityFromZipOwner(candidate.ownerName);
+
+    try {
+      const item = await createSubmissionFromBuffer({
+        filename: candidate.filename,
+        rawBuffer: Buffer.from(candidate.data),
+        size: candidate.data.length,
+        studentIdentity,
+        zipOwnerName: candidate.ownerName,
+      });
+      created.push(item);
+    } catch (error) {
+      if (isEmptyNotebookError(error)) {
+        skipped.push({ filename: candidate.filename, reason: EMPTY_NOTEBOOK_MESSAGE });
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  return { created, skipped };
+}
+
 export async function getSubmissionById(
   id: string,
 ): Promise<SubmissionDetail | null> {
@@ -256,7 +488,13 @@ export async function getSubmissionById(
   const codePath = path.join(DATA_ROOT, `${item.id}.code.py`);
   try {
     const code = await fs.readFile(codePath, "utf8");
-    return { ...item, code };
+    if (item.extension !== ".ipynb") {
+      return { ...item, code };
+    }
+
+    const sourcePath = path.join(DATA_ROOT, `${item.id}${item.extension}`);
+    const sourceContent = await fs.readFile(sourcePath, "utf8");
+    return { ...item, code, notebookCells: notebookCellsFromContent(sourceContent) };
   } catch {
     return null;
   }

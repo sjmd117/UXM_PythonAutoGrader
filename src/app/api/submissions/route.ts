@@ -1,5 +1,5 @@
 ﻿import { NextResponse } from "next/server";
-import { createSubmissionFromFile, deleteSubmissionsByIds, listSubmissions } from "@/features/submissions/server/submissions-repository";
+import { createSubmissionsFromUpload, deleteSubmissionsByIds, listSubmissions } from "@/features/submissions/server/submissions-repository";
 
 export async function GET() {
   try {
@@ -21,12 +21,14 @@ export async function POST(request: Request) {
     }
 
     const created = [];
+    const skipped = [];
     for (const file of files) {
-      const item = await createSubmissionFromFile(file);
-      created.push(item);
+      const result = await createSubmissionsFromUpload(file);
+      created.push(...result.created);
+      skipped.push(...result.skipped);
     }
 
-    return NextResponse.json({ ok: true, created }, { status: 201 });
+    return NextResponse.json({ ok: true, created, skipped }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "파일 업로드에 실패했습니다.";
     return NextResponse.json({ error: message }, { status: 400 });

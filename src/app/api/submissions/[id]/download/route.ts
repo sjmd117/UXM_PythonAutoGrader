@@ -1,5 +1,6 @@
 ﻿import { NextResponse } from "next/server";
 import { getSubmissionSourceById } from "@/features/submissions/server/submissions-repository";
+import { repairFilenameMojibake } from "@/lib/repair-filename";
 
 function contentTypeByExtension(extension: ".py" | ".ipynb"): string {
   if (extension === ".ipynb") {
@@ -16,7 +17,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       return NextResponse.json({ error: "파일을 찾을 수 없습니다." }, { status: 404 });
     }
 
-    const encodedName = encodeURIComponent(source.filename);
+    const encodedName = encodeURIComponent(repairFilenameMojibake(source.filename));
     return new NextResponse(source.content, {
       status: 200,
       headers: {

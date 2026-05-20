@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import TestCaseEditor, { type TestCase } from "@/features/grading/components/TestCaseEditor";
+import { parseForbiddenMethodsInput } from "@/features/grading/lib/forbidden-methods";
+import { repairFilenameMojibake } from "@/lib/repair-filename";
 import { useStoredState, writeStoredValue } from "@/lib/use-stored-state";
 
 type SubmissionMeta = {
@@ -10,11 +12,26 @@ type SubmissionMeta = {
   filename: string;
   extension: ".py" | ".ipynb";
   size: number;
+  studentId?: string;
+  studentName?: string;
+  identitySource?: "zip" | "filename";
+  zipOwnerName?: string;
 };
 
 type ApiListResponse = {
   ok: boolean;
   items: SubmissionMeta[];
+};
+
+type SkippedUpload = {
+  filename: string;
+  reason: string;
+};
+
+type UploadResponse = {
+  ok: boolean;
+  created: SubmissionMeta[];
+  skipped?: SkippedUpload[];
 };
 
 type BatchCaseResult = {
@@ -26,7 +43,7 @@ type BatchCaseResult = {
   expectedOutput: string;
   error?: string;
   runtimeMs: number;
-  status: "passed" | "failed" | "runtime_error" | "timeout";
+  status: "passed" | "failed" | "runtime_error" | "timeout" | "forbidden_method";
 };
 
 type BatchSubmissionResult = {
@@ -35,7 +52,9 @@ type BatchSubmissionResult = {
   extension: ".py" | ".ipynb";
   score: number;
   maxScore: number;
+  accepted?: boolean;
   allPassed: boolean;
+  passedCaseCount?: number;
   failedCaseCount: number;
   results: BatchCaseResult[];
 };
@@ -54,6 +73,7 @@ type StoredGradeResponse = {
     maxScore: number;
     passedCount: number;
     totalCount: number;
+    accepted?: boolean;
   };
   results: BatchCaseResult[];
   pythonCommand: string;
@@ -85,16 +105,48 @@ const createDefaultCase = (): TestCase => ({
 
 const DEFAULT_TEST_CASES = [createDefaultCase()];
 
+function CheckIcon({ label }: { label: string }) {
+  return (
+    <span
+      className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100 text-emerald-700"
+      title={label}
+      aria-label={label}
+      role="img"
+    >
+      <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" aria-hidden="true">
+        <path d="M4.5 10.5 8 14l7.5-8" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
+  );
+}
+
+function XIcon({ label }: { label: string }) {
+  return (
+    <span
+      className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-rose-100 text-rose-700"
+      title={label}
+      aria-label={label}
+      role="img"
+    >
+      <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" aria-hidden="true">
+        <path d="m5.5 5.5 9 9m0-9-9 9" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+      </svg>
+    </span>
+  );
+}
+
 const STORAGE_KEYS = {
   testCases: "uxm-grader:batch:test-cases",
   timeoutMs: "uxm-grader:batch:timeout-ms",
   result: "uxm-grader:batch:result",
+  forbiddenMethods: "uxm-grader:batch:forbidden-methods",
   manualStudentInfo: "uxm-grader:submissions:manual-student-info",
 };
 
 const submissionStorageKeys = (submissionId: string) => ({
   testCases: `uxm-grader:submission:${submissionId}:test-cases`,
   timeoutMs: `uxm-grader:submission:${submissionId}:timeout-ms`,
+  forbiddenMethods: `uxm-grader:submission:${submissionId}:forbidden-methods`,
   result: `uxm-grader:submission:${submissionId}:result`,
 });
 
@@ -110,8 +162,50 @@ function removeDuplicateSuffix(filenameWithoutExtension: string): string {
   return filenameWithoutExtension.replace(/\s*\(\d+\)\s*$/u, "").trim();
 }
 
+function parseHyphenStudentIdentity(text: string) {
+  const normalizedName = removeDuplicateSuffix(removeExtension(text)).normalize("NFC");
+  const matched = normalizedName.match(/^(.+?)-(\d{8})(?:_|$)/u);
+  if (!matched) {
+    return null;
+  }
+
+  const name = matched[1].trim().normalize("NFC");
+  const studentId = matched[2];
+  return name.length > 0 ? { name, studentId } : null;
+}
+
 function classifySubmissionFilename(item: SubmissionMeta): ParsedStudentSubmission | UnmatchedStudentSubmission {
-  const normalizedName = removeDuplicateSuffix(removeExtension(item.filename)).normalize("NFC");
+  if (item.studentId && item.studentName) {
+    return {
+      item,
+      studentId: item.studentId,
+      name: item.studentName,
+    };
+  }
+
+  if (item.zipOwnerName) {
+    const zipIdentity = parseHyphenStudentIdentity(repairFilenameMojibake(item.zipOwnerName));
+    if (zipIdentity) {
+      return {
+        item,
+        studentId: zipIdentity.studentId,
+        name: zipIdentity.name,
+      };
+    }
+  }
+
+  const repairedFilename = repairFilenameMojibake(item.filename);
+  const normalizedName = removeDuplicateSuffix(removeExtension(repairedFilename)).normalize("NFC");
+  const hyphenIdentity = parseHyphenStudentIdentity(repairedFilename);
+
+  if (hyphenIdentity) {
+    return {
+      item,
+      studentId: hyphenIdentity.studentId,
+      name: hyphenIdentity.name,
+    };
+  }
+
   const studentIdMatch = normalizedName.match(/(?:^|_)(60\d{6})(?:_|$)/u);
 
   if (!studentIdMatch) {
@@ -147,10 +241,16 @@ function classifySubmissionFilename(item: SubmissionMeta): ParsedStudentSubmissi
   };
 }
 
-function saveBatchResultsForDetailPages(payload: BatchGradeResponse, testCases: TestCase[], timeoutMs: number) {
+function saveBatchResultsForDetailPages(
+  payload: BatchGradeResponse,
+  testCases: TestCase[],
+  timeoutMs: number,
+  forbiddenMethodsInput: string,
+) {
   for (const submission of payload.submissions) {
     const keys = submissionStorageKeys(submission.id);
     const passedCount = submission.results.filter((item) => item.passed).length;
+    const accepted = submission.accepted ?? submission.score > 0;
     const detailResult: StoredGradeResponse = {
       ok: true,
       pythonCommand: payload.pythonCommand,
@@ -160,11 +260,13 @@ function saveBatchResultsForDetailPages(payload: BatchGradeResponse, testCases: 
         maxScore: submission.maxScore,
         passedCount,
         totalCount: submission.results.length,
+        accepted,
       },
     };
 
     writeStoredValue(keys.testCases, testCases);
     writeStoredValue(keys.timeoutMs, timeoutMs);
+    writeStoredValue(keys.forbiddenMethods, forbiddenMethodsInput);
     writeStoredValue(keys.result, detailResult);
   }
 }
@@ -177,10 +279,12 @@ export default function SubmissionUploadList() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [testCases, setTestCases] = useStoredState<TestCase[]>(STORAGE_KEYS.testCases, DEFAULT_TEST_CASES);
   const [timeoutMs, setTimeoutMs] = useStoredState(STORAGE_KEYS.timeoutMs, 2000);
+  const [forbiddenMethodsInput, setForbiddenMethodsInput] = useStoredState(STORAGE_KEYS.forbiddenMethods, "");
   const [batchResult, setBatchResult] = useStoredState<BatchGradeResponse | null>(STORAGE_KEYS.result, null);
   const [manualStudentInfo, setManualStudentInfo] = useStoredState<ManualStudentInfoMap>(STORAGE_KEYS.manualStudentInfo, {});
 
@@ -224,8 +328,8 @@ export default function SubmissionUploadList() {
       return;
     }
 
-    saveBatchResultsForDetailPages(batchResult, testCases, timeoutMs);
-  }, [batchResult, testCases, timeoutMs]);
+    saveBatchResultsForDetailPages(batchResult, testCases, timeoutMs, forbiddenMethodsInput);
+  }, [batchResult, forbiddenMethodsInput, testCases, timeoutMs]);
 
   const updateCase = (index: number, patch: Partial<TestCase>) => {
     setTestCases((prev) => prev.map((tc, i) => (i === index ? { ...tc, ...patch } : tc)));
@@ -265,6 +369,7 @@ export default function SubmissionUploadList() {
   const onUpload = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
+    setUploadNotice(null);
 
     if (!selectedFiles || selectedFiles.length === 0) {
       setError("업로드할 파일을 선택해주세요.");
@@ -284,12 +389,16 @@ export default function SubmissionUploadList() {
         body: formData,
       });
 
-      const payload = (await response.json()) as { ok: boolean } | { error: string };
+      const payload = (await response.json()) as UploadResponse | { error: string };
       if (!response.ok || !("ok" in payload)) {
         throw new Error("error" in payload ? payload.error : "업로드에 실패했습니다.");
       }
 
       await loadItems();
+      if (payload.skipped && payload.skipped.length > 0) {
+        const skippedNames = payload.skipped.map((item) => repairFilenameMojibake(item.filename)).join(", ");
+        setUploadNotice(`실행 가능한 code cell이 없는 ipynb ${payload.skipped.length}개는 제외했습니다: ${skippedNames}`);
+      }
       setBatchResult(null);
       setSelectedFiles(null);
       const input = document.getElementById("file-upload") as HTMLInputElement | null;
@@ -329,6 +438,7 @@ export default function SubmissionUploadList() {
             weight: item.weight === "" ? undefined : item.weight,
           })),
           timeoutMs,
+          forbiddenMethods: parseForbiddenMethodsInput(forbiddenMethodsInput),
         }),
       });
 
@@ -338,7 +448,7 @@ export default function SubmissionUploadList() {
       }
 
       setBatchResult(payload);
-      saveBatchResultsForDetailPages(payload, testCases, timeoutMs);
+      saveBatchResultsForDetailPages(payload, testCases, timeoutMs, forbiddenMethodsInput);
     } catch (gradeError) {
       setError(gradeError instanceof Error ? gradeError.message : "채점 중 오류가 발생했습니다.");
     } finally {
@@ -423,7 +533,7 @@ export default function SubmissionUploadList() {
       <main className="mx-auto max-w-5xl rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl backdrop-blur md:p-8">
         <h1 className="text-2xl font-black tracking-tight text-slate-900 md:text-4xl">Python 과제 업로드</h1>
         <p className="mt-2 text-sm text-slate-600 md:text-base">
-          `.py`, `.ipynb` 파일 업로드 후 공통 테스트케이스로 전체 파일을 일괄 채점합니다.
+          `.py`, `.ipynb`, `.zip` 파일 업로드 후 공통 테스트케이스로 전체 파일을 일괄 채점합니다.
         </p>
 
         <form className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4" onSubmit={onUpload}>
@@ -431,7 +541,7 @@ export default function SubmissionUploadList() {
             <input
               id="file-upload"
               type="file"
-              accept=".py,.ipynb"
+              accept=".py,.ipynb,.zip,application/zip,application/x-zip-compressed"
               multiple
               onChange={(e) => setSelectedFiles(e.target.files)}
               className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-slate-900 file:px-3 file:py-2 file:text-white"
@@ -447,6 +557,7 @@ export default function SubmissionUploadList() {
         </form>
 
         {error && <p className="mt-4 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
+        {uploadNotice && <p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-800">{uploadNotice}</p>}
 
         <section className="mt-6">
           <h2 className="text-lg font-extrabold text-slate-900">업로드된 파일 리스트</h2>
@@ -483,7 +594,15 @@ export default function SubmissionUploadList() {
                 </div>
               </div>
               <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white">
-                <table className="min-w-full border-collapse text-sm">
+                <table className="min-w-full table-fixed border-collapse text-sm">
+                  <colgroup>
+                    <col className="w-16" />
+                    <col className="w-[42%]" />
+                    <col className="w-32" />
+                    <col className="w-28" />
+                    <col className="w-20" />
+                    <col className="w-32" />
+                  </colgroup>
                   <thead>
                     <tr className="bg-slate-100 text-left text-slate-700">
                       <th className="px-3 py-2">선택</th>
@@ -500,6 +619,7 @@ export default function SubmissionUploadList() {
                       const isMatched = "studentId" in classified;
                       const manualInfo = manualStudentInfo[item.id] ?? { studentId: "", name: "" };
                       const hasManualInfo = manualInfo.studentId.trim().length > 0 && manualInfo.name.trim().length > 0;
+                      const displayFilename = repairFilenameMojibake(item.filename);
 
                       return (
                         <tr key={item.id} className="border-b border-slate-100 last:border-b-0">
@@ -509,15 +629,19 @@ export default function SubmissionUploadList() {
                               checked={selectedIds.includes(item.id)}
                               onChange={() => toggleSelection(item.id)}
                               className="h-4 w-4"
-                              aria-label={`${item.filename} 선택`}
+                              aria-label={`${displayFilename} 선택`}
                             />
                           </td>
                           <td className="px-3 py-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Link href={`/submissions/${item.id}`} className="font-semibold text-blue-700 underline-offset-2 hover:underline">
-                                {item.filename}
+                            <div className="flex min-w-0 items-center gap-2">
+                              <Link
+                                href={`/submissions/${item.id}`}
+                                className="min-w-0 truncate font-semibold text-blue-700 underline-offset-2 hover:underline"
+                                title={displayFilename}
+                              >
+                                {displayFilename}
                               </Link>
-                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                              <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
                                 ID {shortId(item.id)}
                               </span>
                             </div>
@@ -549,12 +673,12 @@ export default function SubmissionUploadList() {
                               />
                             )}
                           </td>
-                          <td
-                            className={`px-3 py-2 text-xs font-semibold ${
-                              isMatched || hasManualInfo ? "text-emerald-700" : "text-rose-700"
-                            }`}
-                          >
-                            {isMatched ? "자동 추출" : hasManualInfo ? "직접 입력" : classified.reason}
+                          <td className="px-3 py-2">
+                            {isMatched ? (
+                              <CheckIcon label="학번과 이름 자동 추출 완료" />
+                            ) : (
+                              <XIcon label={hasManualInfo ? "자동 추출 실패, 직접 입력됨" : `직접 입력 필요: ${classified.reason}`} />
+                            )}
                           </td>
                           <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-500">
                             {item.extension} · {(item.size / 1024).toFixed(1)}KB
@@ -571,7 +695,7 @@ export default function SubmissionUploadList() {
 
         <section className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <p className="mb-2 text-xs text-slate-600">
-            규칙: 케이스 하나라도 틀리면 해당 파일 점수는 0점 처리됩니다. (전체 만점: {maxScore})
+            규칙: 테스트케이스 중 하나라도 맞으면 해당 파일은 정답 처리됩니다. (전체 만점: {maxScore})
           </p>
 
           <TestCaseEditor
@@ -580,6 +704,17 @@ export default function SubmissionUploadList() {
             onRemoveCase={removeCase}
             onUpdateCase={updateCase}
             listClassName={`mt-3 space-y-3 ${caseScrollClass}`.trim()}
+          />
+
+          <label className="mt-4 block text-xs font-semibold text-slate-700" htmlFor="forbidden-methods">
+            금지 메소드
+          </label>
+          <textarea
+            id="forbidden-methods"
+            value={forbiddenMethodsInput}
+            onChange={(event) => setForbiddenMethodsInput(event.target.value)}
+            placeholder="sorted, sort, list.sort"
+            className="mt-2 h-20 w-full resize-none rounded-xl border border-slate-300 p-2 text-xs outline-none ring-amber-300 transition focus:ring-2"
           />
 
           <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -622,32 +757,40 @@ export default function SubmissionUploadList() {
                     <th className="px-3 py-2">파일명</th>
                     <th className="px-3 py-2">점수</th>
                     <th className="px-3 py-2">상태</th>
-                    <th className="px-3 py-2">실패 케이스 수</th>
+                    <th className="px-3 py-2">통과 케이스</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {batchResult.submissions.map((item) => (
-                    <tr key={item.id} className="border-b border-slate-100">
-                      <td className="px-3 py-2">
-                        <Link href={`/submissions/${item.id}`} className="text-blue-700 underline-offset-2 hover:underline">
-                          {item.filename}
-                        </Link>
-                      </td>
-                      <td className="px-3 py-2 font-semibold">
-                        {item.score} / {item.maxScore}
-                      </td>
-                      <td className="px-3 py-2">
-                        <span
-                          className={`rounded-full px-2 py-1 text-xs font-semibold ${
-                            item.allPassed ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-700"
-                          }`}
-                        >
-                          {item.allPassed ? "통과" : "0점 처리"}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2">{item.failedCaseCount}</td>
-                    </tr>
-                  ))}
+                  {batchResult.submissions.map((item) => {
+                    const passedCaseCount = item.passedCaseCount ?? item.results.filter((result) => result.passed).length;
+                    const accepted = item.accepted ?? item.score > 0;
+                    const displayFilename = repairFilenameMojibake(item.filename);
+
+                    return (
+                      <tr key={item.id} className="border-b border-slate-100">
+                        <td className="px-3 py-2">
+                          <Link href={`/submissions/${item.id}`} className="text-blue-700 underline-offset-2 hover:underline">
+                            {displayFilename}
+                          </Link>
+                        </td>
+                        <td className="px-3 py-2 font-semibold">
+                          {item.score} / {item.maxScore}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span
+                            className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                              accepted ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-700"
+                            }`}
+                          >
+                            {accepted ? "정답 처리" : "0점 처리"}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          {passedCaseCount} / {batchResult.testCaseCount}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
