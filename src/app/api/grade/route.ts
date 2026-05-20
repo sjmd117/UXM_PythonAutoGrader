@@ -11,6 +11,7 @@ type GradeRequest = {
   code: string;
   testCases: IncomingTestCase[];
   timeoutMs?: number;
+  forbiddenMethods?: string[];
 };
 
 export async function POST(request: Request) {
@@ -34,7 +35,13 @@ export async function POST(request: Request) {
     }
 
     const timeoutMs = boundedTimeout(payload.timeoutMs);
-    const graded = await gradeCodeAgainstCases({ code: payload.code, testCases: payload.testCases, timeoutMs });
+    const graded = await gradeCodeAgainstCases({
+      code: payload.code,
+      testCases: payload.testCases,
+      timeoutMs,
+      forbiddenMethods: payload.forbiddenMethods,
+      scorePolicy: "any",
+    });
 
     return NextResponse.json({
       ok: true,

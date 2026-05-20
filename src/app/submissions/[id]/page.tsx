@@ -14,5 +14,12 @@ export default async function SubmissionDetailPage({ params }: Props) {
     notFound();
   }
 
-  return <GraderWorkspace submissionId={item.id} filename={item.filename} initialCode={item.code} />;
+  return (
+    <GraderWorkspace
+      submissionId={item.id}
+      filename={item.filename}
+      initialCode={item.code}
+      notebookCells={item.notebookCells}
+    />
+  );
 }

@@ -6,10 +6,12 @@ import {
   type IncomingTestCase,
 } from "@/features/grading/server/python-grading-engine";
 import { listSubmissionDetails } from "@/features/submissions/server/submissions-repository";
+import { repairFilenameMojibake } from "@/lib/repair-filename";
 
 type BatchGradeRequest = {
   testCases: IncomingTestCase[];
   timeoutMs?: number;
+  forbiddenMethods?: string[];
 };
 
 export async function POST(request: Request) {
@@ -38,17 +40,20 @@ export async function POST(request: Request) {
         code: submission.code,
         testCases: payload.testCases,
         timeoutMs,
-        allOrNothing: true,
+        forbiddenMethods: payload.forbiddenMethods,
+        scorePolicy: "any",
       });
 
       pythonCommand = graded.pythonCommand;
       gradedItems.push({
         id: submission.id,
-        filename: submission.filename,
+        filename: repairFilenameMojibake(submission.filename),
         extension: submission.extension,
         score: graded.summary.totalScore,
         maxScore: graded.summary.maxScore,
+        accepted: graded.summary.accepted,
         allPassed: graded.summary.allPassed,
+        passedCaseCount: graded.summary.passedCount,
         failedCaseCount: graded.summary.totalCount - graded.summary.passedCount,
         results: graded.results,
       });

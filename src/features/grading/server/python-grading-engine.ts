@@ -18,14 +18,105 @@ export type GradeCaseResult = {
   expectedOutput: string;
   error?: string;
   runtimeMs: number;
-  status: "passed" | "failed" | "runtime_error" | "timeout";
+  status: "passed" | "failed" | "runtime_error" | "timeout" | "forbidden_method";
 };
+
+export type ForbiddenMethodViolation = {
+  rule: string;
+  call: string;
+  line: number;
+  column: number;
+};
+
+export type CodeRunResult = {
+  pythonCommand: string;
+  stdout: string;
+  stderr: string;
+  status: "ok" | "runtime_error" | "timeout" | "forbidden_method";
+  runtimeMs: number;
+};
+
+type ScorePolicy = "partial" | "all" | "any";
 
 export const MAX_CODE_SIZE = 50_000;
 export const MAX_TEST_CASES = 30;
+export const MAX_FORBIDDEN_METHODS = 50;
+export const MAX_FORBIDDEN_METHOD_LENGTH = 80;
 export const DEFAULT_TIMEOUT_MS = 2_000;
 export const MIN_TIMEOUT_MS = 100;
 export const MAX_TIMEOUT_MS = 20_000;
+const STATIC_ANALYSIS_TIMEOUT_MS = 3_000;
+
+const FORBIDDEN_METHOD_SCAN_SCRIPT = String.raw`
+import ast
+import json
+import sys
+
+rules = [str(item).strip() for item in json.loads(sys.argv[1]) if str(item).strip()]
+rule_lookup = {rule.lower(): rule for rule in rules}
+code = sys.stdin.read()
+
+def attr_chain(node):
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+    if not parts:
+        return ""
+    return ".".join(reversed(parts))
+
+def call_names(func):
+    if isinstance(func, ast.Name):
+        return [func.id]
+    if isinstance(func, ast.Attribute):
+        chain = attr_chain(func)
+        names = [func.attr]
+        if chain:
+            names.append(chain)
+        return names
+    return []
+
+def matches(rule, names):
+    normalized_rule = rule.lower()
+    for name in names:
+        normalized_name = name.lower()
+        if normalized_name == normalized_rule or normalized_name.endswith("." + normalized_rule):
+            return True
+    return False
+
+try:
+    tree = ast.parse(code)
+except SyntaxError as exc:
+    print(json.dumps({"ok": True, "violations": [], "parseError": str(exc)}, ensure_ascii=False))
+    sys.exit(0)
+
+violations = []
+seen = set()
+for node in ast.walk(tree):
+    if not isinstance(node, ast.Call):
+        continue
+    names = call_names(node.func)
+    if not names:
+        continue
+    display_name = max(names, key=len)
+    for normalized_rule, original_rule in rule_lookup.items():
+        if not matches(normalized_rule, names):
+            continue
+        key = (original_rule, display_name, getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
+        if key in seen:
+            continue
+        seen.add(key)
+        violations.append({
+            "rule": original_rule,
+            "call": display_name,
+            "line": getattr(node, "lineno", 0),
+            "column": getattr(node, "col_offset", 0) + 1,
+        })
+
+print(json.dumps({"ok": True, "violations": violations}, ensure_ascii=False))
+`;
 
 let cachedPythonCommand: string | null = null;
 
@@ -138,6 +229,67 @@ export function boundedTimeout(timeoutMs?: number): number {
   return Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, Math.floor(timeoutMs)));
 }
 
+export function normalizeForbiddenMethods(value?: string[]): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const unique = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string") {
+      continue;
+    }
+    const normalized = item.trim();
+    if (!normalized || normalized.length > MAX_FORBIDDEN_METHOD_LENGTH) {
+      continue;
+    }
+    unique.add(normalized);
+    if (unique.size >= MAX_FORBIDDEN_METHODS) {
+      break;
+    }
+  }
+
+  return [...unique];
+}
+
+function formatForbiddenMethodError(violations: ForbiddenMethodViolation[]): string {
+  const preview = violations
+    .slice(0, 5)
+    .map((item) => `${item.rule} 사용 감지 (${item.line}:${item.column}, 호출: ${item.call})`)
+    .join("\n");
+
+  const suffix = violations.length > 5 ? `\n외 ${violations.length - 5}건` : "";
+  return `금지 메소드가 사용되어 채점하지 않았습니다.\n${preview}${suffix}`;
+}
+
+async function scanForbiddenMethods(params: {
+  pythonCommand: string;
+  code: string;
+  forbiddenMethods: string[];
+}): Promise<ForbiddenMethodViolation[]> {
+  if (params.forbiddenMethods.length === 0) {
+    return [];
+  }
+
+  const execution = await spawnAndCollect(
+    params.pythonCommand,
+    ["-I", "-c", FORBIDDEN_METHOD_SCAN_SCRIPT, JSON.stringify(params.forbiddenMethods)],
+    params.code,
+    STATIC_ANALYSIS_TIMEOUT_MS,
+  );
+
+  if (execution.status !== "ok") {
+    return [];
+  }
+
+  try {
+    const payload = JSON.parse(execution.stdout) as { violations?: ForbiddenMethodViolation[] };
+    return Array.isArray(payload.violations) ? payload.violations : [];
+  } catch {
+    return [];
+  }
+}
+
 function spawnAndCollect(command: string, args: string[], stdinText: string, timeoutMs: number, cwd?: string) {
   return new Promise<{
     stdout: string;
@@ -227,15 +379,108 @@ export async function detectPythonCommand(): Promise<string> {
   throw new Error("Python 실행기를 찾지 못했습니다. python 또는 python3를 설치해주세요.");
 }
 
+export async function runPythonCode(params: {
+  code: string;
+  stdin?: string;
+  timeoutMs: number;
+  forbiddenMethods?: string[];
+}): Promise<CodeRunResult> {
+  const { code, timeoutMs } = params;
+  const pythonCommand = await detectPythonCommand();
+  const forbiddenMethods = normalizeForbiddenMethods(params.forbiddenMethods);
+  const forbiddenViolations = await scanForbiddenMethods({
+    pythonCommand,
+    code,
+    forbiddenMethods,
+  });
+
+  if (forbiddenViolations.length > 0) {
+    return {
+      pythonCommand,
+      stdout: "",
+      stderr: formatForbiddenMethodError(forbiddenViolations),
+      status: "forbidden_method",
+      runtimeMs: 0,
+    };
+  }
+
+  const prompts = extractInputPrompts(code);
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "uxm-grader-run-"));
+  const scriptPath = path.join(tempDir, "student.py");
+
+  try {
+    await fs.writeFile(scriptPath, code, "utf8");
+    const execution = await spawnAndCollect(
+      pythonCommand,
+      ["-I", scriptPath],
+      typeof params.stdin === "string" ? params.stdin : "",
+      timeoutMs,
+      tempDir,
+    );
+
+    return {
+      pythonCommand,
+      stdout: normalizeOutput(stripInputPrompts(execution.stdout, prompts)),
+      stderr: execution.stderr.trim(),
+      status: execution.status,
+      runtimeMs: execution.runtimeMs,
+    };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 export async function gradeCodeAgainstCases(params: {
   code: string;
   testCases: IncomingTestCase[];
   timeoutMs: number;
+  forbiddenMethods?: string[];
+  scorePolicy?: ScorePolicy;
   allOrNothing?: boolean;
 }) {
   const { code, testCases, timeoutMs, allOrNothing = false } = params;
+  const scorePolicy = params.scorePolicy ?? (allOrNothing ? "all" : "partial");
+  const forbiddenMethods = normalizeForbiddenMethods(params.forbiddenMethods);
   const prompts = extractInputPrompts(code);
   const pythonCommand = await detectPythonCommand();
+
+  const forbiddenViolations = await scanForbiddenMethods({
+    pythonCommand,
+    code,
+    forbiddenMethods,
+  });
+
+  if (forbiddenViolations.length > 0) {
+    const error = formatForbiddenMethodError(forbiddenViolations);
+    const results = testCases.map((testCase, index): GradeCaseResult => {
+      const scoreTotal = parseWeight(testCase.weight);
+      return {
+        index,
+        passed: false,
+        scoreEarned: 0,
+        scoreTotal,
+        expectedOutput: normalizeOutput(typeof testCase.expectedOutput === "string" ? testCase.expectedOutput : ""),
+        actualOutput: "",
+        error,
+        runtimeMs: 0,
+        status: "forbidden_method",
+      };
+    });
+    const weightedTotal = results.reduce((acc, item) => acc + item.scoreTotal, 0);
+
+    return {
+      pythonCommand,
+      results,
+      summary: {
+        totalScore: 0,
+        maxScore: weightedTotal,
+        passedCount: 0,
+        totalCount: testCases.length,
+        allPassed: false,
+        accepted: false,
+      },
+    };
+  }
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "uxm-grader-"));
   const scriptPath = path.join(tempDir, "student.py");
@@ -291,11 +536,19 @@ export async function gradeCodeAgainstCases(params: {
   }
 
   const allPassed = passedCount === testCases.length;
-  const totalScore = allOrNothing
-    ? allPassed
-      ? weightedTotal
-      : 0
-    : results.reduce((acc, item) => acc + item.scoreEarned, 0);
+  const anyPassed = passedCount > 0;
+  const accepted =
+    scorePolicy === "all" ? allPassed : scorePolicy === "any" ? anyPassed : anyPassed;
+  const totalScore =
+    scorePolicy === "all"
+      ? allPassed
+        ? weightedTotal
+        : 0
+      : scorePolicy === "any"
+        ? anyPassed
+          ? weightedTotal
+          : 0
+        : results.reduce((acc, item) => acc + item.scoreEarned, 0);
 
   return {
     pythonCommand,
@@ -306,6 +559,7 @@ export async function gradeCodeAgainstCases(params: {
       passedCount,
       totalCount: testCases.length,
       allPassed,
+      accepted,
     },
   };
 }
