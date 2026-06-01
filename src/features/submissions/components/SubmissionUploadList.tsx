@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import TestCaseEditor, { type TestCase } from "@/features/grading/components/TestCaseEditor";
 import { parseForbiddenMethodsInput } from "@/features/grading/lib/forbidden-methods";
 import { repairFilenameMojibake } from "@/lib/repair-filename";
@@ -136,18 +136,20 @@ function XIcon({ label }: { label: string }) {
 }
 
 const STORAGE_KEYS = {
-  testCases: "uxm-grader:batch:test-cases",
-  timeoutMs: "uxm-grader:batch:timeout-ms",
-  result: "uxm-grader:batch:result",
-  forbiddenMethods: "uxm-grader:batch:forbidden-methods",
-  manualStudentInfo: "uxm-grader:submissions:manual-student-info",
+  testCases: "test-cases",
+  timeoutMs: "timeout-ms",
+  result: "result",
+  forbiddenMethods: "forbidden-methods",
+  manualStudentInfo: "manual-student-info",
 };
 
-const submissionStorageKeys = (submissionId: string) => ({
-  testCases: `uxm-grader:submission:${submissionId}:test-cases`,
-  timeoutMs: `uxm-grader:submission:${submissionId}:timeout-ms`,
-  forbiddenMethods: `uxm-grader:submission:${submissionId}:forbidden-methods`,
-  result: `uxm-grader:submission:${submissionId}:result`,
+const projectStorageKey = (projectId: string, key: string) => `uxm-grader:project:${projectId}:${key}`;
+
+const submissionStorageKeys = (projectId: string, submissionId: string) => ({
+  testCases: `uxm-grader:project:${projectId}:submission:${submissionId}:test-cases`,
+  timeoutMs: `uxm-grader:project:${projectId}:submission:${submissionId}:timeout-ms`,
+  forbiddenMethods: `uxm-grader:project:${projectId}:submission:${submissionId}:forbidden-methods`,
+  result: `uxm-grader:project:${projectId}:submission:${submissionId}:result`,
 });
 
 function shortId(id: string): string {
@@ -242,13 +244,14 @@ function classifySubmissionFilename(item: SubmissionMeta): ParsedStudentSubmissi
 }
 
 function saveBatchResultsForDetailPages(
+  projectId: string,
   payload: BatchGradeResponse,
   testCases: TestCase[],
   timeoutMs: number,
   forbiddenMethodsInput: string,
 ) {
   for (const submission of payload.submissions) {
-    const keys = submissionStorageKeys(submission.id);
+    const keys = submissionStorageKeys(projectId, submission.id);
     const passedCount = submission.results.filter((item) => item.passed).length;
     const accepted = submission.accepted ?? submission.score > 0;
     const detailResult: StoredGradeResponse = {
@@ -271,7 +274,12 @@ function saveBatchResultsForDetailPages(
   }
 }
 
-export default function SubmissionUploadList() {
+type Props = {
+  projectId: string;
+  projectName: string;
+};
+
+export default function SubmissionUploadList({ projectId, projectName }: Props) {
   const [items, setItems] = useState<SubmissionMeta[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
@@ -282,11 +290,23 @@ export default function SubmissionUploadList() {
   const [uploadNotice, setUploadNotice] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [testCases, setTestCases] = useStoredState<TestCase[]>(STORAGE_KEYS.testCases, DEFAULT_TEST_CASES);
-  const [timeoutMs, setTimeoutMs] = useStoredState(STORAGE_KEYS.timeoutMs, 2000);
-  const [forbiddenMethodsInput, setForbiddenMethodsInput] = useStoredState(STORAGE_KEYS.forbiddenMethods, "");
-  const [batchResult, setBatchResult] = useStoredState<BatchGradeResponse | null>(STORAGE_KEYS.result, null);
-  const [manualStudentInfo, setManualStudentInfo] = useStoredState<ManualStudentInfoMap>(STORAGE_KEYS.manualStudentInfo, {});
+  const [testCases, setTestCases] = useStoredState<TestCase[]>(
+    projectStorageKey(projectId, STORAGE_KEYS.testCases),
+    DEFAULT_TEST_CASES,
+  );
+  const [timeoutMs, setTimeoutMs] = useStoredState(projectStorageKey(projectId, STORAGE_KEYS.timeoutMs), 2000);
+  const [forbiddenMethodsInput, setForbiddenMethodsInput] = useStoredState(
+    projectStorageKey(projectId, STORAGE_KEYS.forbiddenMethods),
+    "",
+  );
+  const [batchResult, setBatchResult] = useStoredState<BatchGradeResponse | null>(
+    projectStorageKey(projectId, STORAGE_KEYS.result),
+    null,
+  );
+  const [manualStudentInfo, setManualStudentInfo] = useStoredState<ManualStudentInfoMap>(
+    projectStorageKey(projectId, STORAGE_KEYS.manualStudentInfo),
+    {},
+  );
 
   const maxScore = useMemo(
     () => testCases.reduce((acc, item) => acc + (typeof item.weight === "number" ? item.weight : 0), 0),
@@ -296,9 +316,9 @@ export default function SubmissionUploadList() {
   const allChecked = items.length > 0 && selectedIds.length === items.length;
   const caseScrollClass = testCases.length > 2 ? "max-h-[420px] overflow-y-auto pr-1" : "";
 
-  const loadItems = async () => {
+  const loadItems = useCallback(async () => {
     setError(null);
-    const response = await fetch("/api/submissions", { cache: "no-store" });
+    const response = await fetch(`/api/projects/${projectId}/submissions`, { cache: "no-store" });
     const payload = (await response.json()) as ApiListResponse | { error: string };
 
     if (!response.ok || !("items" in payload)) {
@@ -307,7 +327,7 @@ export default function SubmissionUploadList() {
 
     setItems(payload.items);
     setSelectedIds((prev) => prev.filter((id) => payload.items.some((item) => item.id === id)));
-  };
+  }, [projectId]);
 
   useEffect(() => {
     const run = async () => {
@@ -321,15 +341,15 @@ export default function SubmissionUploadList() {
     };
 
     void run();
-  }, []);
+  }, [loadItems]);
 
   useEffect(() => {
     if (!batchResult) {
       return;
     }
 
-    saveBatchResultsForDetailPages(batchResult, testCases, timeoutMs, forbiddenMethodsInput);
-  }, [batchResult, forbiddenMethodsInput, testCases, timeoutMs]);
+    saveBatchResultsForDetailPages(projectId, batchResult, testCases, timeoutMs, forbiddenMethodsInput);
+  }, [batchResult, forbiddenMethodsInput, projectId, testCases, timeoutMs]);
 
   const updateCase = (index: number, patch: Partial<TestCase>) => {
     setTestCases((prev) => prev.map((tc, i) => (i === index ? { ...tc, ...patch } : tc)));
@@ -384,7 +404,7 @@ export default function SubmissionUploadList() {
         formData.append("files", file);
       }
 
-      const response = await fetch("/api/submissions", {
+      const response = await fetch(`/api/projects/${projectId}/submissions`, {
         method: "POST",
         body: formData,
       });
@@ -428,7 +448,7 @@ export default function SubmissionUploadList() {
 
     setIsGrading(true);
     try {
-      const response = await fetch("/api/grade/batch", {
+      const response = await fetch(`/api/projects/${projectId}/grade/batch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -448,7 +468,7 @@ export default function SubmissionUploadList() {
       }
 
       setBatchResult(payload);
-      saveBatchResultsForDetailPages(payload, testCases, timeoutMs, forbiddenMethodsInput);
+      saveBatchResultsForDetailPages(projectId, payload, testCases, timeoutMs, forbiddenMethodsInput);
     } catch (gradeError) {
       setError(gradeError instanceof Error ? gradeError.message : "채점 중 오류가 발생했습니다.");
     } finally {
@@ -466,7 +486,7 @@ export default function SubmissionUploadList() {
     setIsDownloading(true);
     try {
       for (const id of selectedIds) {
-        const response = await fetch(`/api/submissions/${id}/download`);
+        const response = await fetch(`/api/projects/${projectId}/submissions/${id}/download`);
         if (!response.ok) {
           const payload = (await response.json()) as { error?: string };
           throw new Error(payload.error ?? "파일 다운로드에 실패했습니다.");
@@ -507,7 +527,7 @@ export default function SubmissionUploadList() {
     setError(null);
     setIsDeleting(true);
     try {
-      const response = await fetch("/api/submissions", {
+      const response = await fetch(`/api/projects/${projectId}/submissions`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids: selectedIds }),
@@ -531,10 +551,18 @@ export default function SubmissionUploadList() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,#e0f2fe_0%,#dbeafe_48%,#ede9fe_100%)] p-4 md:p-8">
       <main className="mx-auto max-w-5xl rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl backdrop-blur md:p-8">
-        <h1 className="text-2xl font-black tracking-tight text-slate-900 md:text-4xl">Python 과제 업로드</h1>
-        <p className="mt-2 text-sm text-slate-600 md:text-base">
-          `.py`, `.ipynb`, `.zip` 파일 업로드 후 공통 테스트케이스로 전체 파일을 일괄 채점합니다.
-        </p>
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Project</p>
+            <h1 className="text-2xl font-black tracking-tight text-slate-900 md:text-4xl">{projectName}</h1>
+            <p className="mt-2 text-sm text-slate-600 md:text-base">
+              `.py`, `.ipynb`, `.zip` 파일 업로드 후 공통 테스트케이스로 전체 파일을 일괄 채점합니다.
+            </p>
+          </div>
+          <Link href="/" className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700">
+            과제 목록
+          </Link>
+        </div>
 
         <form className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4" onSubmit={onUpload}>
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -635,7 +663,7 @@ export default function SubmissionUploadList() {
                           <td className="px-3 py-2">
                             <div className="flex min-w-0 items-center gap-2">
                               <Link
-                                href={`/submissions/${item.id}`}
+                                href={`/projects/${projectId}/submissions/${item.id}`}
                                 className="min-w-0 truncate font-semibold text-blue-700 underline-offset-2 hover:underline"
                                 title={displayFilename}
                               >
@@ -769,7 +797,7 @@ export default function SubmissionUploadList() {
                     return (
                       <tr key={item.id} className="border-b border-slate-100">
                         <td className="px-3 py-2">
-                          <Link href={`/submissions/${item.id}`} className="text-blue-700 underline-offset-2 hover:underline">
+                          <Link href={`/projects/${projectId}/submissions/${item.id}`} className="text-blue-700 underline-offset-2 hover:underline">
                             {displayFilename}
                           </Link>
                         </td>

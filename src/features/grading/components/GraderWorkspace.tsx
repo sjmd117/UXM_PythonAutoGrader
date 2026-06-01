@@ -48,6 +48,8 @@ type CellRunResult = {
 };
 
 type Props = {
+  projectId?: string;
+  projectName?: string;
   submissionId: string;
   filename: string;
   initialCode: string;
@@ -83,28 +85,37 @@ function runStatusLabel(status: CellRunResult["status"]): string {
   }
 }
 
-export default function GraderWorkspace({ submissionId, filename, initialCode, notebookCells = [] }: Props) {
+function storagePrefix(projectId: string | undefined, submissionId: string): string {
+  return projectId
+    ? `uxm-grader:project:${projectId}:submission:${submissionId}`
+    : `uxm-grader:submission:${submissionId}`;
+}
+
+export default function GraderWorkspace({ projectId, projectName, submissionId, filename, initialCode, notebookCells = [] }: Props) {
   const displayFilename = repairFilenameMojibake(filename);
-  const [code, setCode] = useStoredState(`uxm-grader:submission:${submissionId}:code`, initialCode);
-  const [cellInput, setCellInput] = useStoredState(`uxm-grader:submission:${submissionId}:cell-input`, "");
+  const storageKeyPrefix = storagePrefix(projectId, submissionId);
+  const backHref = projectId ? `/projects/${projectId}` : "/";
+  const projectListHref = "/";
+  const [code, setCode] = useStoredState(`${storageKeyPrefix}:code`, initialCode);
+  const [cellInput, setCellInput] = useStoredState(`${storageKeyPrefix}:cell-input`, "");
   const [notebookCellDrafts, setNotebookCellDrafts] = useStoredState<NotebookCodeCell[]>(
-    `uxm-grader:submission:${submissionId}:notebook-cells`,
+    `${storageKeyPrefix}:notebook-cells`,
     notebookCells,
   );
   const [testCases, setTestCases] = useStoredState<TestCase[]>(
-    `uxm-grader:submission:${submissionId}:test-cases`,
+    `${storageKeyPrefix}:test-cases`,
     DEFAULT_TEST_CASES,
   );
-  const [timeoutMs, setTimeoutMs] = useStoredState(`uxm-grader:submission:${submissionId}:timeout-ms`, 2000);
+  const [timeoutMs, setTimeoutMs] = useStoredState(`${storageKeyPrefix}:timeout-ms`, 2000);
   const [forbiddenMethodsInput, setForbiddenMethodsInput] = useStoredState(
-    `uxm-grader:submission:${submissionId}:forbidden-methods`,
+    `${storageKeyPrefix}:forbidden-methods`,
     "",
   );
   const [isLoading, setIsLoading] = useState(false);
   const [runningCellId, setRunningCellId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cellRunResults, setCellRunResults] = useState<Record<string, CellRunResult>>({});
-  const [result, setResult] = useStoredState<GradeResponse | null>(`uxm-grader:submission:${submissionId}:result`, null);
+  const [result, setResult] = useStoredState<GradeResponse | null>(`${storageKeyPrefix}:result`, null);
 
   const hasNotebookCells = notebookCellDrafts.length > 0;
   const maxScore = useMemo(
@@ -247,11 +258,19 @@ export default function GraderWorkspace({ submissionId, filename, initialCode, n
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-black tracking-tight text-slate-900 md:text-4xl">채점 상세 페이지</h1>
+            {projectName && <p className="mt-1 text-xs font-bold uppercase tracking-wide text-emerald-700">{projectName}</p>}
             <p className="mt-1 text-sm text-slate-600">파일: {displayFilename}</p>
           </div>
-          <Link href="/" className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
-            파일 목록으로
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            {projectId && (
+              <Link href={projectListHref} className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700">
+                과제 목록
+              </Link>
+            )}
+            <Link href={backHref} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
+              {projectId ? "프로젝트 파일 목록" : "파일 목록"}
+            </Link>
+          </div>
         </div>
 
         <p className="mt-3 text-xs text-slate-500">Submission ID: {submissionId}</p>

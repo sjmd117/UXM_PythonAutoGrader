@@ -1,5 +1,5 @@
-﻿import SubmissionUploadList from "@/features/submissions/components/SubmissionUploadList";
+import ProjectsDashboard from "@/features/projects/components/ProjectsDashboard";
 
 export default function Home() {
-  return <SubmissionUploadList />;
+  return <ProjectsDashboard />;
 }

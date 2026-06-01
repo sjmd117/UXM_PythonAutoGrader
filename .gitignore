@@ -43,3 +43,4 @@ next-env.d.ts
 # local uploaded submission files
 /data/**/*.py
 /data/**/*.ipynb
+/data/projects/

@@ -50,13 +50,35 @@ type StudentIdentity = {
   identitySource: "zip" | "filename";
 };
 
-const DATA_ROOT = path.join(process.cwd(), "data", "submissions");
-const INDEX_PATH = path.join(DATA_ROOT, "index.json");
+const LEGACY_DATA_ROOT = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "submissions");
+const PROJECTS_ROOT = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "projects");
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
 const MAX_ZIP_FILE_SIZE = 50 * 1024 * 1024;
 const MAX_ZIP_ENTRY_SIZE = 2 * 1024 * 1024;
 const MAX_ZIP_SUBMISSIONS = 500;
 const EMPTY_NOTEBOOK_MESSAGE = "ipynb 안에 실행 가능한 code cell이 없습니다.";
+
+function assertProjectId(projectId: string) {
+  if (!/^[a-zA-Z0-9_-]+$/u.test(projectId)) {
+    throw new Error("유효하지 않은 과제 ID입니다.");
+  }
+}
+
+function getStorePaths(projectId?: string) {
+  if (!projectId) {
+    return {
+      dataRoot: LEGACY_DATA_ROOT,
+      indexPath: path.join(LEGACY_DATA_ROOT, "index.json"),
+    };
+  }
+
+  assertProjectId(projectId);
+  const dataRoot = path.join(PROJECTS_ROOT, projectId, "submissions");
+  return {
+    dataRoot,
+    indexPath: path.join(dataRoot, "index.json"),
+  };
+}
 
 function extOf(name: string): ".py" | ".ipynb" | null {
   const lower = name.toLowerCase();
@@ -266,36 +288,45 @@ function isEmptyNotebookError(error: unknown): boolean {
   return error instanceof Error && error.message === EMPTY_NOTEBOOK_MESSAGE;
 }
 
-async function ensureStore() {
-  await fs.mkdir(DATA_ROOT, { recursive: true });
+async function ensureStore(projectId?: string) {
+  const { dataRoot, indexPath } = getStorePaths(projectId);
+  await fs.mkdir(dataRoot, { recursive: true });
   try {
-    await fs.access(INDEX_PATH);
+    await fs.access(indexPath);
   } catch {
     const initial: SubmissionIndex = { items: [] };
-    await fs.writeFile(INDEX_PATH, JSON.stringify(initial, null, 2), "utf8");
+    await fs.writeFile(indexPath, JSON.stringify(initial, null, 2), "utf8");
   }
 }
 
-async function readIndex(): Promise<SubmissionIndex> {
-  await ensureStore();
-  const raw = await fs.readFile(INDEX_PATH, "utf8");
+async function readIndex(projectId?: string): Promise<SubmissionIndex> {
+  await ensureStore(projectId);
+  const { indexPath } = getStorePaths(projectId);
+  const raw = await fs.readFile(indexPath, "utf8");
   const parsed = JSON.parse(raw) as SubmissionIndex;
   return {
     items: Array.isArray(parsed.items) ? parsed.items : [],
   };
 }
 
-async function writeIndex(index: SubmissionIndex) {
-  await fs.writeFile(INDEX_PATH, JSON.stringify(index, null, 2), "utf8");
+async function writeIndex(index: SubmissionIndex, projectId?: string) {
+  const { indexPath } = getStorePaths(projectId);
+  await fs.writeFile(indexPath, JSON.stringify(index, null, 2), "utf8");
 }
 
-export async function listSubmissions(): Promise<SubmissionMeta[]> {
-  const index = await readIndex();
+export async function countSubmissions(projectId?: string): Promise<number> {
+  const index = await readIndex(projectId);
+  return index.items.length;
+}
+
+export async function listSubmissions(projectId?: string): Promise<SubmissionMeta[]> {
+  const index = await readIndex(projectId);
   return [...index.items].reverse();
 }
 
 export async function createSubmissionFromFile(
   file: File,
+  projectId?: string,
 ): Promise<SubmissionMeta> {
   const rawName = sanitizeFilename(file.name);
   const extension = extOf(rawName);
@@ -318,12 +349,13 @@ export async function createSubmissionFromFile(
   }
 
   const id = crypto.randomUUID();
-  await ensureStore();
-  const index = await readIndex();
+  await ensureStore(projectId);
+  const index = await readIndex(projectId);
   const filename = dedupeFilename(rawName, index.items);
 
-  const sourcePath = path.join(DATA_ROOT, `${id}${extension}`);
-  const codePath = path.join(DATA_ROOT, `${id}.code.py`);
+  const { dataRoot } = getStorePaths(projectId);
+  const sourcePath = path.join(dataRoot, `${id}${extension}`);
+  const codePath = path.join(dataRoot, `${id}.code.py`);
   await fs.writeFile(sourcePath, content, "utf8");
   await fs.writeFile(codePath, code, "utf8");
 
@@ -335,7 +367,7 @@ export async function createSubmissionFromFile(
   };
 
   index.items.push(item);
-  await writeIndex(index);
+  await writeIndex(index, projectId);
   return item;
 }
 
@@ -345,6 +377,7 @@ async function createSubmissionFromBuffer(params: {
   size: number;
   studentIdentity?: StudentIdentity | null;
   zipOwnerName?: string;
+  projectId?: string;
 }): Promise<SubmissionMeta> {
   const rawName = sanitizeFilename(params.filename);
   const extension = extOf(rawName);
@@ -365,12 +398,13 @@ async function createSubmissionFromBuffer(params: {
   }
 
   const id = crypto.randomUUID();
-  await ensureStore();
-  const index = await readIndex();
+  await ensureStore(params.projectId);
+  const index = await readIndex(params.projectId);
   const filename = dedupeFilename(rawName, index.items);
 
-  const sourcePath = path.join(DATA_ROOT, `${id}${extension}`);
-  const codePath = path.join(DATA_ROOT, `${id}.code.py`);
+  const { dataRoot } = getStorePaths(params.projectId);
+  const sourcePath = path.join(dataRoot, `${id}${extension}`);
+  const codePath = path.join(dataRoot, `${id}.code.py`);
   await fs.writeFile(sourcePath, content, "utf8");
   await fs.writeFile(codePath, code, "utf8");
 
@@ -390,15 +424,15 @@ async function createSubmissionFromBuffer(params: {
   };
 
   index.items.push(item);
-  await writeIndex(index);
+  await writeIndex(index, params.projectId);
   return item;
 }
 
-export async function createSubmissionsFromUpload(file: File): Promise<SubmissionUploadResult> {
+export async function createSubmissionsFromUpload(file: File, projectId?: string): Promise<SubmissionUploadResult> {
   if (!isZipFile(file.name)) {
     try {
       return {
-        created: [await createSubmissionFromFile(file)],
+        created: [await createSubmissionFromFile(file, projectId)],
         skipped: [],
       };
     } catch (error) {
@@ -462,6 +496,7 @@ export async function createSubmissionsFromUpload(file: File): Promise<Submissio
         size: candidate.data.length,
         studentIdentity,
         zipOwnerName: candidate.ownerName,
+        projectId,
       });
       created.push(item);
     } catch (error) {
@@ -478,21 +513,23 @@ export async function createSubmissionsFromUpload(file: File): Promise<Submissio
 
 export async function getSubmissionById(
   id: string,
+  projectId?: string,
 ): Promise<SubmissionDetail | null> {
-  const index = await readIndex();
+  const index = await readIndex(projectId);
   const item = index.items.find((entry) => entry.id === id);
   if (!item) {
     return null;
   }
 
-  const codePath = path.join(DATA_ROOT, `${item.id}.code.py`);
+  const { dataRoot } = getStorePaths(projectId);
+  const codePath = path.join(dataRoot, `${item.id}.code.py`);
   try {
     const code = await fs.readFile(codePath, "utf8");
     if (item.extension !== ".ipynb") {
       return { ...item, code };
     }
 
-    const sourcePath = path.join(DATA_ROOT, `${item.id}${item.extension}`);
+    const sourcePath = path.join(dataRoot, `${item.id}${item.extension}`);
     const sourceContent = await fs.readFile(sourcePath, "utf8");
     return { ...item, code, notebookCells: notebookCellsFromContent(sourceContent) };
   } catch {
@@ -500,12 +537,13 @@ export async function getSubmissionById(
   }
 }
 
-export async function listSubmissionDetails(): Promise<SubmissionDetail[]> {
-  const index = await readIndex();
+export async function listSubmissionDetails(projectId?: string): Promise<SubmissionDetail[]> {
+  const index = await readIndex(projectId);
   const sorted = [...index.items].reverse();
+  const { dataRoot } = getStorePaths(projectId);
   const details = await Promise.all(
     sorted.map(async (item) => {
-      const codePath = path.join(DATA_ROOT, `${item.id}.code.py`);
+      const codePath = path.join(dataRoot, `${item.id}.code.py`);
       try {
         const code = await fs.readFile(codePath, "utf8");
         return { ...item, code };
@@ -520,14 +558,16 @@ export async function listSubmissionDetails(): Promise<SubmissionDetail[]> {
 
 export async function getSubmissionSourceById(
   id: string,
+  projectId?: string,
 ): Promise<SubmissionSource | null> {
-  const index = await readIndex();
+  const index = await readIndex(projectId);
   const item = index.items.find((entry) => entry.id === id);
   if (!item) {
     return null;
   }
 
-  const sourcePath = path.join(DATA_ROOT, `${item.id}${item.extension}`);
+  const { dataRoot } = getStorePaths(projectId);
+  const sourcePath = path.join(dataRoot, `${item.id}${item.extension}`);
   try {
     const content = await fs.readFile(sourcePath, "utf8");
     return { ...item, content };
@@ -538,25 +578,32 @@ export async function getSubmissionSourceById(
 
 export async function deleteSubmissionsByIds(
   ids: string[],
+  projectId?: string,
 ): Promise<{ deletedCount: number }> {
   if (ids.length === 0) {
     return { deletedCount: 0 };
   }
 
   const idSet = new Set(ids);
-  const index = await readIndex();
+  const index = await readIndex(projectId);
   const targets = index.items.filter((item) => idSet.has(item.id));
+  const { dataRoot } = getStorePaths(projectId);
 
   await Promise.all(
     targets.map(async (item) => {
-      const sourcePath = path.join(DATA_ROOT, `${item.id}${item.extension}`);
-      const codePath = path.join(DATA_ROOT, `${item.id}.code.py`);
+      const sourcePath = path.join(dataRoot, `${item.id}${item.extension}`);
+      const codePath = path.join(dataRoot, `${item.id}.code.py`);
       await fs.rm(sourcePath, { force: true });
       await fs.rm(codePath, { force: true });
     }),
   );
 
   index.items = index.items.filter((item) => !idSet.has(item.id));
-  await writeIndex(index);
+  await writeIndex(index, projectId);
   return { deletedCount: targets.length };
+}
+
+export async function deleteProjectSubmissionStore(projectId: string): Promise<void> {
+  assertProjectId(projectId);
+  await fs.rm(path.join(PROJECTS_ROOT, projectId), { recursive: true, force: true });
 }
