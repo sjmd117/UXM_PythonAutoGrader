@@ -60,20 +60,6 @@ Python 과제 제출 파일을 업로드하고, 공통 테스트케이스로 자
 | 한글 파일명 깨짐 보정 | 완료 | `repairFilenameMojibake` |
 | 브라우저 로컬 저장 | 완료 | `useStoredState` |
 
-### 3.2 미구현/기획 단계 기능
-
-| 기능 | 필요성 | 권장 구현 |
-| --- | --- | --- |
-| 로그인/회원가입 | 조교별 접근 제어 | NextAuth/Auth.js 또는 자체 세션 |
-| 프로젝트 설정 고도화 | 테스트케이스/파일명 규칙 등 과제 설정 관리 | `ProjectSetting` DB 모델 도입 |
-| 조교 초대/권한 | 협업 및 감사 추적 | `Membership` 모델과 RBAC |
-| 영구 채점 이력 | 결과 재현성 확보 | `GradeRun`, `CaseResult` 저장 |
-| 최종 점수 확정/수동 조정 | 실제 성적 산출 | `FinalScore`, 감사 로그 |
-| 코멘트/피드백 | 학생 피드백 관리 | `Comment` 모델 |
-| Excel/CSV 내보내기 | 성적 제출 업무 | `xlsx` 또는 CSV exporter |
-| 서버 사이드 정렬/필터 | 제출 규모 증가 대응 | API query + DB index |
-| 안전한 코드 샌드박스 | 임의 Python 실행 위험 완화 | Docker/firejail/nsjail/격리 워커 |
-
 ---
 
 ## 4. 기술 스택 및 실행 환경
