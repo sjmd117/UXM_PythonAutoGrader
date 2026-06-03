@@ -277,9 +277,9 @@ type SubmissionMeta = {
 
 ---
 
-## 8. 현재 데이터 모델 ERD
+## 8. 데이터 저장 구조 및 파일 기반 데이터 모델
 
-현재 구현은 DB 기반 ERD가 아니라 파일 저장소와 클라이언트 상태를 조합합니다.
+현재 구현은 별도 DB를 사용하지 않으므로 전통적인 관계형 데이터베이스 모델을 전제로 하지 않습니다. 대신 과제, 제출 메타데이터, 원본 파일, 채점용 코드 파일, 브라우저 저장값 간의 관계를 파일 기반 데이터 모델로 정리합니다.
 
 ```mermaid
 erDiagram
@@ -345,9 +345,9 @@ erDiagram
 
 ---
 
-## 10. API 명세
+## 9. API 명세
 
-### 10.1 과제 관리
+### 9.1 과제 관리
 
 #### `GET /api/projects`
 
@@ -374,7 +374,7 @@ erDiagram
 
 과제를 삭제합니다. 해당 과제의 제출 파일 저장소도 함께 삭제됩니다.
 
-### 10.2 제출 관리
+### 9.2 제출 관리
 
 #### `GET /api/projects/[projectId]/submissions`
 
@@ -439,7 +439,7 @@ erDiagram
 
 하위 호환용 전역 제출 API(`/api/submissions`, `/api/submissions/[id]`)도 남아 있지만, 신규 화면은 과제별 API만 사용합니다.
 
-### 10.3 코드 실행/채점
+### 9.3 코드 실행/채점
 
 #### `POST /api/run`
 
@@ -530,11 +530,11 @@ Python 코드를 한 번 실행합니다. Notebook 셀 실행에 사용됩니다
 
 ---
 
-## 11. 채점 엔진 상세
+## 10. 채점 엔진 상세
 
 핵심 파일: `src/features/grading/server/python-grading-engine.ts`
 
-### 11.1 실행 방식
+### 10.1 실행 방식
 
 1. 서버가 `python`, `python3`, `py` 순서로 실행 가능한 Python 명령을 탐색합니다.
 2. 제출 코드를 임시 디렉터리의 `student.py`로 저장합니다.
@@ -545,7 +545,7 @@ Python 코드를 한 번 실행합니다. Notebook 셀 실행에 사용됩니다
 
 `-I` 옵션은 Python isolated mode를 활성화하지만, OS 수준 샌드박스는 아닙니다. 신뢰할 수 없는 코드를 실행하는 서비스라면 반드시 추가 격리가 필요합니다.
 
-### 11.2 제한값
+### 10.2 제한값
 
 | 상수 | 값 | 의미 |
 | --- | --- | --- |
@@ -557,7 +557,7 @@ Python 코드를 한 번 실행합니다. Notebook 셀 실행에 사용됩니다
 | `MAX_FORBIDDEN_METHODS` | 50 | 금지 메소드 최대 개수 |
 | `MAX_FORBIDDEN_METHOD_LENGTH` | 80 | 금지 메소드 문자열 최대 길이 |
 
-### 11.3 출력 비교 정책
+### 10.3 출력 비교 정책
 
 정답 비교는 완전 엄격 비교가 아니라 다음 순서의 완화 비교를 사용합니다.
 
@@ -575,7 +575,7 @@ Python 코드를 한 번 실행합니다. Notebook 셀 실행에 사용됩니다
 - 토큰 부분집합 비교 때문에 의도보다 관대하게 정답 처리될 수 있습니다.
 - 채점 기준이 엄격해야 하는 과제는 비교 정책을 과제별로 선택 가능하게 분리하는 것이 좋습니다.
 
-### 11.4 점수 정책
+### 10.4 점수 정책
 
 현재 API는 `scorePolicy: "any"`를 사용합니다.
 
@@ -584,7 +584,7 @@ Python 코드를 한 번 실행합니다. Notebook 셀 실행에 사용됩니다
 
 엔진 내부에는 `"partial"`, `"all"`, `"any"` 정책이 존재하지만 현재 라우트에서는 `"any"`로 고정되어 있습니다. 과제 유형에 따라 이 정책은 반드시 설정 가능하도록 확장하는 것이 좋습니다.
 
-### 11.5 금지 메소드 검사
+### 10.5 금지 메소드 검사
 
 금지 메소드 검사는 Python AST를 이용합니다.
 
@@ -599,11 +599,11 @@ Python 코드를 한 번 실행합니다. Notebook 셀 실행에 사용됩니다
 
 ---
 
-## 12. 제출 처리 상세
+## 11. 제출 처리 상세
 
 핵심 파일: `src/features/submissions/server/submissions-repository.ts`
 
-### 12.1 업로드 처리
+### 11.1 업로드 처리
 
 ```mermaid
 flowchart TD
@@ -623,14 +623,14 @@ flowchart TD
     L --> H
 ```
 
-### 12.2 Notebook 처리
+### 11.2 Notebook 처리
 
 - `cells` 배열 중 `cell_type === "code"`인 셀만 추출합니다.
 - `source`가 문자열 배열이면 join하고, 문자열이면 그대로 사용합니다.
 - 빈 code cell은 제외합니다.
 - 실행 가능한 code cell이 하나도 없으면 해당 파일은 업로드에서 제외되거나 오류 처리됩니다.
 
-### 12.3 인코딩 처리
+### 11.3 인코딩 처리
 
 텍스트 디코딩은 다음 후보를 사용합니다.
 
@@ -642,7 +642,7 @@ flowchart TD
 
 파일명은 `repairFilenameMojibake`에서 UTF-8/EUC-KR 후보 점수를 비교해 한글이 더 자연스러운 값을 선택합니다.
 
-### 12.4 학생 정보 자동 추출 규칙
+### 11.4 학생 정보 자동 추출 규칙
 
 현재 UI/서버는 다음 규칙을 우선 사용합니다.
 
@@ -661,9 +661,9 @@ assignment_60231234_홍길동.py
 
 ---
 
-## 13. 화면 구성
+## 12. 화면 구성
 
-### 13.1 `/`
+### 12.1 `/`
 
 과제 관리 상위 화면입니다.
 
@@ -680,7 +680,7 @@ assignment_60231234_홍길동.py
 - `DELETE /api/projects/[projectId]`를 호출합니다.
 - `data/projects/{projectId}` 아래의 제출 파일과 인덱스가 함께 삭제됩니다.
 
-### 13.2 `/projects/[projectId]`
+### 12.2 `/projects/[projectId]`
 
 과제별 제출 관리 및 일괄 채점 화면입니다.
 
@@ -699,7 +699,7 @@ assignment_60231234_홍길동.py
 - 일괄 채점 결과 표시
 - 상단 `과제 목록` 버튼으로 `/` 이동
 
-### 13.3 `/projects/[projectId]/submissions/[id]`
+### 12.3 `/projects/[projectId]/submissions/[id]`
 
 개별 제출 상세 및 재채점 화면입니다.
 
@@ -717,7 +717,7 @@ assignment_60231234_홍길동.py
 
 ---
 
-## 14. App Router 주의사항
+## 13. App Router 주의사항
 
 이 프로젝트는 Next.js 16 App Router를 사용합니다. 현재 Next 문서 기준으로 `params`는 Promise 형태로 처리되고 있습니다.
 
@@ -745,9 +745,9 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 
 ---
 
-## 15. 품질/보안 리스크
+## 14. 품질/보안 리스크
 
-### 15.1 가장 중요한 리스크
+### 14.1 가장 중요한 리스크
 
 | 리스크 | 영향 | 권장 조치 |
 | --- | --- | --- |
@@ -760,7 +760,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 | 비교 로직이 관대함 | 오답이 통과될 수 있음 | strict/lenient/numeric 모드 분리 |
 | 테스트 코드 없음 | 회귀 검출 어려움 | 엔진/저장소/API 단위 테스트 추가 |
 
-### 15.2 운영상 주의
+### 14.2 운영상 주의
 
 - 현재 구조는 로컬 또는 내부망 데모에 적합합니다.
 - 외부 사용자에게 공개하기 전 인증, 권한, 실행 격리, 업로드 용량 제한, 파일 스캔이 필요합니다.
@@ -769,9 +769,9 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 
 ---
 
-## 16. 유지보수 가이드
+## 15. 유지보수 가이드
 
-### 16.1 자주 수정하게 될 파일
+### 15.1 자주 수정하게 될 파일
 
 | 작업 | 파일 |
 | --- | --- |
@@ -784,7 +784,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 | 테스트케이스 입력 UI 수정 | `src/features/grading/components/TestCaseEditor.tsx` |
 | API 응답 형식 변경 | `src/app/api/**/route.ts` |
 
-### 16.2 변경 시 체크리스트
+### 15.2 변경 시 체크리스트
 
 - `pnpm lint` 통과 여부 확인
 - `pnpm build` 통과 여부 확인
@@ -795,7 +795,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 - 금지 메소드가 실행 전 차단되는지 확인
 - timeout이 정상 동작하는지 확인
 
-### 16.3 추천 테스트 전략
+### 15.3 추천 테스트 전략
 
 우선순위가 높은 테스트:
 
@@ -814,7 +814,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 
 ---
 
-## 17. 빠른 인수인계 요약
+## 16. 빠른 인수인계 요약
 
 - 메인 화면은 `src/app/page.tsx`가 `ProjectsDashboard`를 렌더링합니다.
 - 과제 채점 화면은 `src/app/projects/[projectId]/page.tsx`가 `SubmissionUploadList`를 렌더링합니다.
